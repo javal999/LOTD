@@ -12,7 +12,8 @@ const roster = [
   { id: 4, name: 'Dewi' }, { id: 5, name: 'Eka' }, { id: 6, name: 'Fajar' },
 ];
 const TODAY = '2026-07-14';
-const G = (players, loser, day) => ({ players, loser, played_at: `2026-07-${day}T21:00:00Z` });
+let nextId = 1;
+const G = (players, loser, day) => ({ id: nextId++, players, loser, played_at: `2026-07-${day}T21:00:00Z` });
 let games = [
   G([1,2,3,4],2,'12'), G([1,2,3,4],3,'12'), G([1,2,3,4],2,'12'), G([1,2,3,6],6,'12'), G([1,2,4,6],2,'12'),
   G([1,3,4,6],3,'13'), G([2,3,4,6],4,'13'), G([1,2,3,4],2,'13'), G([1,2,3,4],3,'13'), G([1,2,4,5],5,'13'),
@@ -35,12 +36,33 @@ export function logGame({ players, loser }) {
   const v = validateGame(players, loser);
   if (!v.ok) throw new Error(v.error);
   const played_at = `${TODAY}T${String(21 + (games.length % 3)).padStart(2, '0')}:${String(games.length % 60).padStart(2, '0')}:00Z`;
-  games.push({ players: players.slice(), loser, played_at });
-  return games.at(-1);
+  const game = { id: nextId++, players: players.slice(), loser, played_at };
+  games.push(game);
+  return game;
 }
 
 // Undo the most recently logged game. Returns the removed game, or null if none.
 export function undoLast() {
   if (!unlocked) throw new Error('unlock first');
   return games.pop() ?? null;
+}
+
+// Change who lost in a past game. Re-validates the invariant (the new loser must be
+// one of that game's four players) so an edit can never produce an illegal record (PRD 7.6).
+export function editLoser(id, loser) {
+  if (!unlocked) throw new Error('unlock first');
+  const game = games.find((g) => g.id === id);
+  if (!game) throw new Error('game not found');
+  const v = validateGame(game.players, loser);
+  if (!v.ok) throw new Error(v.error);
+  game.loser = loser;
+  return game;
+}
+
+// Delete a past game by id. Returns the removed game, or throws if the id is unknown.
+export function deleteGame(id) {
+  if (!unlocked) throw new Error('unlock first');
+  const i = games.findIndex((g) => g.id === id);
+  if (i === -1) throw new Error('game not found');
+  return games.splice(i, 1)[0];
 }

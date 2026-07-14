@@ -77,6 +77,7 @@ function render() {
 
   app.innerHTML = `
     ${tonight}
+    ${unlocked ? '<div class="admin-row"><button class="linkbtn" id="history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent games</button></div>' : ''}
     <div class="sort" role="group" aria-label="Ranking mode">
       <button data-mode="${MODES.LOSS_RATE}" aria-pressed="${mode === MODES.LOSS_RATE}">Loss rate</button>
       <button data-mode="${MODES.GAMES_NOT_LOST}" aria-pressed="${mode === MODES.GAMES_NOT_LOST}">Games not lost</button>
@@ -95,6 +96,7 @@ function render() {
 
 function wireDynamic() {
   document.getElementById('logbtn')?.addEventListener('click', openLog);
+  document.getElementById('history')?.addEventListener('click', openHistory);
 }
 
 // ---- Overlay + sheet plumbing ----
@@ -192,6 +194,52 @@ function showToast(game) {
     api.undoLast(); toast.remove(); render();
   });
   toastTimer = setTimeout(() => toast.remove(), 5000);
+}
+
+// ---- Recent games: fix a past game's loser or delete it (PRD 7.6) ----
+function openHistory() {
+  let editingId = null, confirmingId = null;
+  const box = el(`<div class="sheet"><h2>Recent games</h2>
+    <p class="sheet-sub">Fix the loser or delete a game. Newest first.</p>
+    <div class="glog" id="glog"></div>
+    <div class="sheet-actions"><button class="btn-ghost" data-close>Done</button></div></div>`);
+  openSheet(box);
+  const list = box.querySelector('#glog');
+  const day = (iso) => iso.slice(5, 10).replace('-', '/');
+
+  function draw() {
+    const { roster, games } = api.state();
+    if (!games.length) { list.innerHTML = '<p class="glog-empty">No games yet.</p>'; return; }
+    list.innerHTML = games.slice().reverse().map((g) => {
+      const players = g.players.map((id) => nameOf(roster, id)).join(' · ');
+      if (editingId === g.id) {
+        const choices = g.players.map((id) =>
+          `<button class="chip${g.loser === id ? ' on' : ''}" data-newloser="${g.id}:${id}">${nameOf(roster, id)}</button>`).join('');
+        return `<div class="glog-row"><div class="glog-main"><div class="glog-players">${players}</div>
+          <div class="glog-choices">Who lost? ${choices}</div></div></div>`;
+      }
+      if (confirmingId === g.id) {
+        return `<div class="glog-row"><div class="glog-main"><div class="glog-players">${players}</div>
+          <div class="glog-loser">Delete this game?</div></div>
+          <div class="glog-actions"><button class="danger" data-confirmdel="${g.id}">Delete</button>
+          <button data-cancel="${g.id}">Keep</button></div></div>`;
+      }
+      return `<div class="glog-row"><div class="glog-main"><div class="glog-players">${players}</div>
+        <div class="glog-loser"><span class="loss">${nameOf(roster, g.loser)}</span> lost · ${day(g.played_at)}</div></div>
+        <div class="glog-actions"><button data-edit="${g.id}">Edit</button><button data-del="${g.id}">Delete</button></div></div>`;
+    }).join('');
+  }
+
+  list.addEventListener('click', (e) => {
+    const t = e.target.closest('button'); if (!t) return;
+    const d = t.dataset;
+    if (d.edit) { editingId = Number(d.edit); confirmingId = null; draw(); }
+    else if (d.newloser) { const [gid, lid] = d.newloser.split(':').map(Number); api.editLoser(gid, lid); editingId = null; render(); draw(); }
+    else if (d.del) { confirmingId = Number(d.del); editingId = null; draw(); }
+    else if (d.confirmdel) { api.deleteGame(Number(d.confirmdel)); confirmingId = null; render(); draw(); }
+    else if (d.cancel) { confirmingId = null; draw(); }
+  });
+  draw();
 }
 
 document.getElementById('lock').addEventListener('click', () => {

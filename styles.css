@@ -208,4 +208,30 @@ body.unlocked .wrap { padding-bottom:96px; }
 .toast strong { font-weight:700; }
 .toast-undo { border:0; background:transparent; color:var(--gold); font-weight:700; font-size:14px; padding:6px 10px; }
 
+/* Admin: recent-games link */
+.admin-row { display:flex; justify-content:flex-end; margin:-8px 2px 14px; }
+.linkbtn {
+  display:inline-flex; align-items:center; gap:6px; border:0; background:transparent;
+  color:var(--felt); font-size:14px; font-weight:600; padding:6px 4px;
+}
+.linkbtn svg { width:15px; height:15px; stroke:currentColor; fill:none; stroke-width:2; }
+
+/* Recent-games log (in the sheet) */
+.glog { max-height:52vh; overflow-y:auto; margin:0 -4px; }
+.glog-empty { color:var(--ink-2); padding:20px 4px; }
+.glog-row { display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); }
+.glog-row:last-child { border-bottom:0; }
+.glog-main { flex:1; min-width:0; }
+.glog-players { font-size:15px; font-weight:600; }
+.glog-loser { font-size:13px; color:var(--ink-2); margin-top:2px; }
+.glog-loser .loss { color:var(--clay); font-weight:600; }
+.glog-choices { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:13px; color:var(--ink-2); margin-top:8px; }
+.glog-actions { display:flex; gap:6px; flex:none; }
+.glog-actions button {
+  height:34px; padding:0 12px; border-radius:var(--radius-pill); font-size:13px; font-weight:600;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+}
+.glog-actions button.danger { color:var(--clay); border-color:transparent; background:color-mix(in srgb, var(--clay) 12%, var(--surface-2)); }
+.glog .chip { height:32px; padding:0 12px; font-size:13px; }
+
 @media (prefers-reduced-motion: reduce) { *, .sheet { transition:none !important; animation:none !important; } }
