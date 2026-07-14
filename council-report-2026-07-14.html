@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Council report: Card game standings tracker PRD</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#6b6b6b; --line:#e6e4df; --bg:#faf9f6; --card:#ffffff;
+    --accent:#2f6f4f; --warn:#b4552d; --clash:#8a6d1f; --blind:#5b4a8a;
+    --a:#2f6f4f; --b:#2b6cb0; --c:#b4552d; --d:#7a4fa3; --e:#0f7d84;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55;font-size:16px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 22px 80px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:26px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  h1{font-size:27px;line-height:1.25;margin:.35em 0 .15em}
+  .sub{color:var(--muted);font-size:15px}
+  .q{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--ink);
+    border-radius:8px;padding:16px 18px;margin:22px 0}
+  .q .lab{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px}
+  .q p{margin:0;font-size:15.5px}
+  .note{font-size:13.5px;color:var(--muted);margin-top:10px}
+  h2{font-size:15px;letter-spacing:.02em;margin:34px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+  .verdict{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 20px 18px;margin-top:8px}
+  .vblock{padding:16px 0;border-bottom:1px solid var(--line)}
+  .vblock:last-child{border-bottom:none}
+  .vblock h3{margin:0 0 7px;font-size:16px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .vblock.agree h3 .dot{background:var(--accent)}
+  .vblock.clash h3 .dot{background:var(--clash)}
+  .vblock.blind h3 .dot{background:var(--blind)}
+  .vblock.rec h3 .dot{background:var(--b)}
+  .vblock.first h3 .dot{background:var(--warn)}
+  .vblock p{margin:.4em 0}
+  .vblock ol,.vblock ul{margin:.4em 0;padding-left:20px}
+  .vblock li{margin:.3em 0}
+  .rec{background:#f2f7f3;border:1px solid #cfe3d6;border-radius:8px;padding:4px 18px 14px;margin-top:14px}
+  .first{background:#fbf1ec;border:1px solid #eed6c8;border-radius:8px;padding:4px 18px 14px;margin-top:14px}
+  /* matrix */
+  table.mx{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  table.mx th,table.mx td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line)}
+  table.mx th{background:#f4f2ec;font-weight:600;font-size:12px;letter-spacing:.03em}
+  table.mx td:first-child{font-weight:600}
+  .tag{display:inline-block;font-size:11px;padding:2px 7px;border-radius:20px;font-weight:600;white-space:nowrap}
+  .tag.y{background:#e3f0e8;color:#215c3d}
+  .tag.n{background:#f6e5dd;color:#8f3d1c}
+  .tag.p{background:#f0ecd6;color:#6d5a12}
+  .adv{display:flex;gap:9px;flex-wrap:wrap;margin:12px 0 4px}
+  .chip{font-size:12.5px;padding:4px 11px;border-radius:20px;border:1px solid var(--line);background:var(--card);font-weight:600}
+  .chip .cd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  details{background:var(--card);border:1px solid var(--line);border-radius:8px;margin:9px 0;overflow:hidden}
+  details[open]{box-shadow:0 1px 0 rgba(0,0,0,.02)}
+  summary{cursor:pointer;padding:13px 16px;font-weight:600;font-size:15px;list-style:none;display:flex;align-items:center;gap:9px}
+  summary::-webkit-details-marker{display:none}
+  summary .cd{width:10px;height:10px;border-radius:50%;flex:none}
+  summary .arrow{margin-left:auto;color:var(--muted);font-size:13px;transition:transform .15s}
+  details[open] summary .arrow{transform:rotate(90deg)}
+  .body{padding:2px 16px 16px;font-size:14.5px;color:#2b2b2b}
+  .body .role{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;margin-bottom:6px}
+  footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+  .pill{display:inline-block;background:#eef3ef;color:#215c3d;border:1px solid #cfe3d6;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:600;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="kicker">LLM Council &middot; verdict</div>
+    <h1>Card game standings tracker &mdash; requirement review</h1>
+    <div class="sub">5 advisors, anonymized peer review, chairman synthesis &middot; 2026-07-14</div>
+  </header>
+
+  <div class="q">
+    <div class="lab">The question</div>
+    <p>Is the PRD for a 4-player card game standings tracker a flawless requirement before any build? Locked: strictly 4 players, exactly 1 loser per game, one admin logs everything, no per-user accounts. Standings show games played, losses, and rank, sortable by most wins and by lowest loss rate.</p>
+    <p class="note">Mid-review the requirement changed from "single device" to a <strong>web app with data that stays consistent across devices</strong>. That change resolves the council's number-one finding, so the verdict below already accounts for it.</p>
+  </div>
+
+  <h2>COUNCIL VERDICT</h2>
+  <div class="verdict">
+
+    <div class="vblock agree">
+      <h3><span class="dot"></span>Where the council agrees</h3>
+      <ol>
+        <li><strong>"Wins" is a fiction.</strong> With 1 loser per game, 3 people "win" every time, and games-not-lost = GP &minus; L is redundant with the two numbers beside it. Relabel it and add a one-line legend. Stop filing the definition as an open question.</li>
+        <li><strong>Persistence was the fatal flaw.</strong> On one device with no export, a dead phone erased everything. Promote shared storage and export to P0. Your new cross-device web-app requirement fixes this directly.</li>
+        <li><strong>Keep the build small.</strong> Rename-with-history, full retroactive edit, adjustable threshold, and heavy season machinery are gold-plating for a 4-friend scoreboard.</li>
+        <li><strong>Close the illegal-edit hole.</strong> Any edit must still enforce exactly 4 players and 1 loser, or the admin can save a broken record.</li>
+      </ol>
+    </div>
+
+    <div class="vblock clash">
+      <h3><span class="dot"></span>Where the council clashes</h3>
+      <p><strong>Scope.</strong> The Expansionist wants delight features (loser of the night, rivalries, streaks) in P0 because the real job is bragging rights. The Executor and 3 reviewers say that is building the second floor before the ground floor, since persistence was not even solved. <em>Resolution:</em> fix persistence and the "wins" relabel first, then add just one cheap ritual (loser of the night) that serves the stated rivalry pain. Defer the rest to P1.</p>
+      <p><strong>Do you need two sorts?</strong> First Principles showed both rankings give the same order when everyone plays equally, so a fixed group that always shows up needs only one. Others keep both because you asked. <em>Resolution:</em> keep both, state the overlap plainly, fix the contradictory tiebreak, and settle it by asking the 4 players how often the lineup changes.</p>
+    </div>
+
+    <div class="vblock blind">
+      <h3><span class="dot"></span>Blind spots the peer review caught</h3>
+      <ul>
+        <li><strong>One admin, forever.</strong> Every number depends on one person logging every game. A few skipped or misremembered nights distort loss rate silently, with no audit trail. This is a habit risk, not a feature.</li>
+        <li><strong>A permanent loser board can sour the game.</strong> Default to the skill view and show the positive number first.</li>
+        <li><strong>Cheapest unblock:</strong> ask the 4 players what a "win" means to them and how often the lineup changes. No advisor proposed it.</li>
+      </ul>
+    </div>
+
+    <div class="vblock rec">
+      <div class="rec">
+      <h3><span class="dot"></span>The recommendation</h3>
+      <p>Ship a hosted web app with a shared backend so data persists and stays consistent across devices. Single admin writes via a passcode-gated edit mode; everyone else opens the same URL and sees a live read-only standings. Keep P0 tight: log a game (enforcing 4 players and 1 loser on create and edit), live standings with both sorts and a legend, undo-last, persistent shared storage, and export. Relabel "wins" as <strong>games not lost</strong>. Add one delight hook, <strong>loser of the night</strong>. Defer head-to-head, streaks, and season awards to P1.</p>
+      </div>
+    </div>
+
+    <div class="vblock first">
+      <div class="first">
+      <h3><span class="dot"></span>The one thing to do first</h3>
+      <p>Lock the data model and hosting: one shared URL, one backend table of game rows (timestamp, 4 player slots, loser), admin writes gated by a passcode, everyone else read-only. Everything in the standings is derived from that table. Prove it persists across two devices before building any UI polish.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <h2>ADVISOR POSITIONS AT A GLANCE</h2>
+  <table class="mx">
+    <thead>
+      <tr><th>Advisor</th><th>Persistence / backup is P0</th><th>Relabel "wins"</th><th>Delight features now</th><th>Keep build minimal</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="tag" style="background:#e9f0ec;color:#215c3d">Contrarian</span></td><td><span class="tag y">Yes, fatal</span></td><td><span class="tag y">Yes</span></td><td><span class="tag n">No</span></td><td><span class="tag p">Mixed</span></td></tr>
+      <tr><td><span class="tag" style="background:#e9f0ec;color:#215c3d">First Principles</span></td><td><span class="tag p">Silent</span></td><td><span class="tag y">Yes, core</span></td><td><span class="tag p">Reframe</span></td><td><span class="tag y">Yes</span></td></tr>
+      <tr><td><span class="tag" style="background:#e9f0ec;color:#215c3d">Expansionist</span></td><td><span class="tag n">Ignored</span></td><td><span class="tag p">Silent</span></td><td><span class="tag y">Yes, P0</span></td><td><span class="tag n">No</span></td></tr>
+      <tr><td><span class="tag" style="background:#e9f0ec;color:#215c3d">Outsider</span></td><td><span class="tag p">Silent</span></td><td><span class="tag y">Yes</span></td><td><span class="tag p">Silent</span></td><td><span class="tag p">Silent</span></td></tr>
+      <tr><td><span class="tag" style="background:#e9f0ec;color:#215c3d">Executor</span></td><td><span class="tag y">Yes, fatal</span></td><td><span class="tag p">Silent</span></td><td><span class="tag n">No</span></td><td><span class="tag y">Yes</span></td></tr>
+    </tbody>
+  </table>
+  <p class="note">Peer review picked the Contrarian and the Executor as strongest, and flagged the Expansionist's push for delight features as the biggest blind spot (enriching data on a foundation that could not yet persist).</p>
+
+  <h2>FULL ADVISOR RESPONSES</h2>
+
+  <details>
+    <summary><span class="cd" style="background:var(--c)"></span>The Contrarian<span class="arrow">&#9656;</span></summary>
+    <div class="body">
+      <div class="role">Looks for what will fail</div>
+      <p>The single sharpest flaw: the PRD treats a decided constraint as an open, blocking question. Section 11 lists "single device vs. sync" as blocking and Section 12 calls it the gating dependency. That is locked. Delete it. Worse, the "no cloud, single device" constraint manufactures a data-loss risk the PRD never mitigates: weeks of standings and archived seasons live on one device with no P0 backup, and export is buried in P1. One lost phone erases everything. Export and backup belong in P0. This is the actual fatal flaw.</p>
+      <p>Section 7.5 lets the host change the roster, but no acceptance criterion re-asserts the invariant: editing must still force exactly 4 players and 1 loser. You can edit a game into an illegal state. In lowest-loss-rate mode, provisional players get no rank, so half the required sort modes leaves some people rankless. "Most wins" is near-degenerate: with W = GP &minus; L and a 25% loss rate, wins track games-played by construction. Open Question #4 defines the group's core word "win"; resolve it before build.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="cd" style="background:var(--a)"></span>The First Principles Thinker<span class="arrow">&#9656;</span></summary>
+    <div class="body">
+      <div class="role">Rebuilds the problem from scratch</div>
+      <p>You documented the model beautifully and answered the wrong question. In a 4-player, 1-loser game there are no winners. The only atomic fact the app records is a loss. "Wins" (W = GP &minus; L) is a derived, redundant column carrying zero information beyond GP and L. The group asked for wins; you gave them arithmetic. The honest label is "games survived."</p>
+      <p>Is dual-sort the real need? It only produces two orderings when attendance differs. For a fixed group who mostly all show up, when GP is equal, "most wins" descending and "lowest loss rate" ascending are the same list. Dual-sort is a symptom of not knowing how variable attendance is. The actual job is a roast machine; the emotional payload is the loser. Raw losses and loss rate answer "who is the biggest loser" and "who is genuinely good" cleanly. Contradiction: the most-wins tiebreak (Section 8 row 4) breaks ties by "fewer games played," importing skill logic into the activity ranking. One axis per sort, or drop the second.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="cd" style="background:var(--d)"></span>The Expansionist<span class="arrow">&#9656;</span></summary>
+    <div class="body">
+      <div class="role">Looks for the upside everyone missed</div>
+      <p>The PRD is engineered like a spreadsheet. It captures a timestamp, full roster, and loser per game, a richer event log than the standings table ever spends, and that surplus is the real upside, buried in P1. Three near-zero-cost payoffs: "loser of the night" is one grouping away, an instant recurring ritual and screenshot bait. Rivalries via head-to-head need no new inputs, and the problem statement literally names "weak rivalry" as the pain then exiles the cure to P1. Streaks turn a static table into a live story: "Ade has not lost in 6."</p>
+      <p>Then compound it for free: season awards at reset, auto-generate a "season wrapped" card (champion, biggest loser, longest streak, fiercest rivalry) from archived data, zero new schema. The PRD undersells itself: it frames success as logging speed, but the moat is memory and bragging rights. Promote loser-of-the-night and head-to-head into P0.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="cd" style="background:var(--e)"></span>The Outsider<span class="arrow">&#9656;</span></summary>
+    <div class="body">
+      <div class="role">Zero context, reads only what is there</div>
+      <p>The "wins" problem is worse than the open question admits. Three people win every game, so "wins" never means "beat someone," it means "showed up and was not the loser." Since W = GP &minus; L, the W and L columns are mathematically redundant: three columns that are really two. Cut W, or label it "games not lost." Loss rate as the default "who is best" view inverts normal standings intuition: rank 1 holds the lowest number, while every scoreboard a newcomer has seen puts the biggest number on top. Expect confusion.</p>
+      <p>The 25% luck line is well-reasoned but invisible to a stranger: the table only styles sub-25% players with no legend. Terminology drifts between "provisional" and "not enough games yet"; pick one. Contradiction: 7.2 says "default 4," implying changeable, while non-goal 3 says locked at 4. "Season" is never defined. And Appendix A's Eka, who never lost yet ranks last in most-wins mode, looks broken to anyone who does not grasp the model.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="cd" style="background:var(--b)"></span>The Executor<span class="arrow">&#9656;</span></summary>
+    <div class="body">
+      <div class="role">Can it be built, and what is the first step</div>
+      <p>Simplest thing that works: a single HTML file with local storage, or a spreadsheet with one row per game and a pivot for standings. Everything in the scoring model is derivable from that one row. Genuinely needed P0: log a game, standings, the two sorts, undo-last. Gold-plating dressed as P0: archive-player plus rename-with-history, full retroactive edit of any past game, season reset with read-only archives, and a host-adjustable threshold (hardcode 5).</p>
+      <p>Where a builder stalls: storage is unspecified; backup is absent and this is the real flaw, since one dead phone erases everything and export is buried in P1, so promote export and backup to P0; tiebreaks are fine. Monday morning: build one page, hardcoded 4 names, tap-loser and save, computed standings with a sort toggle. That slice tests the 10-second, 3-tap goal tonight.</p>
+    </div>
+  </details>
+
+  <h2>PEER REVIEW HIGHLIGHTS</h2>
+  <details>
+    <summary><span class="cd" style="background:#8a8577"></span>What the reviewers converged on<span class="arrow">&#9656;</span></summary>
+    <div class="body">
+      <p><strong>Strongest responses:</strong> the Contrarian (widest set of real defects, only one to catch the illegal-edit hole) and the Executor (turns critique into a Monday build). Both named the missing backup as fatal.</p>
+      <p><strong>Biggest blind spot (all 5 reviewers):</strong> the Expansionist, for promoting delight features onto a foundation that could not yet persist a single night. "Building the second floor before the ground floor exists."</p>
+      <p><strong>What all five advisors missed:</strong></p>
+      <ul>
+        <li>The single-admin single point of failure and logging discipline. If the admin is absent or forgets, the record is silently wrong, and there is no audit trail.</li>
+        <li>The social risk of a permanent "biggest loser" board among friends.</li>
+        <li>The cheapest resolver for the "what is a win / how many sorts" debate is to ask the 4 players.</li>
+      </ul>
+    </div>
+  </details>
+
+  <footer>
+    <span class="pill">Verdict: build a shared web app, keep P0 tight</span>
+    <p>Counciled on 2026-07-14. Method: 5 independent advisors, anonymized peer review, chairman synthesis (adapted from Karpathy's LLM Council). Full text in <code>council-transcript-2026-07-14.md</code>. The reviewed requirement is <code>PRD-card-game-standings-tracker.md</code> (updated to v2 with these findings).</p>
+  </footer>
+</div>
+</body>
+</html>
