@@ -3,3 +3,4 @@ node_modules/
 
 # exported backups (runtime artifacts)
 LOTD-*.json
+.vercel
