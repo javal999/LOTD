@@ -1,0 +1,7 @@
+# Ship only the static app — not docs, tests, backend source, or tooling.
+*.md
+council-*.html
+supabase
+design-system
+.claude
+js/*.test.mjs
