@@ -135,7 +135,7 @@ Edge cases we handle (full list in the PRD section 8):
 ## 5c. Data contracts
 
 Edge Function `admin` request: JSON `{ action: string, passcode: string, payload: object }`. Response: `{ ok: boolean, data?: object, error?: string }`. `[A]`
-- `log_game` payload: `{ p1, p2, p3, p4, loser }` (player ids; loser must be one of the four). Server re-validates before insert. `[A]`
+- `log_game` payload: `{ players: [id,id,id,id], loser }` (loser must be one of the four). Server re-validates the invariant, then inserts into `p1..p4`. `[V: built 2026-07-14]`
 - `edit_loser` payload: `{ game_id, loser }`. Server checks loser is one of that game's four players. `[A]`
 - `undo_last`, `delete_game` payload: `{}` or `{ game_id }`. `start_season` payload: `{ name }`. `[A]`
 - Rejects: bad passcode → 401; invalid payload or invariant violation → 400 with a message; the client shows the message and changes nothing. `[A]`
