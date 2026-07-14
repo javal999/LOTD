@@ -54,3 +54,29 @@ test('editLoser and deleteGame require unlock', () => {
   assert.throws(() => api.deleteGame(g.id), /unlock/);
   api.unlock('any'); api.deleteGame(g.id);
 });
+
+test('exportData is a complete, rebuildable snapshot', () => {
+  api.unlock('any');
+  const data = api.exportData();
+  assert.equal(data.app, 'LOTD');
+  assert.ok(data.games.length > 0);
+  assert.equal(data.games[0].players.length, 4);
+  assert.ok(data.roster.length >= 4);
+  assert.ok(Array.isArray(data.archives));
+});
+
+test('startSeason requires unlock', () => {
+  api.lock();
+  assert.throws(() => api.startSeason('Season 2'), /unlock/);
+});
+
+// Destructive to the shared mock (clears games) — keep this test LAST.
+test('startSeason archives current games and resets counts to zero', () => {
+  api.unlock('any');
+  const had = api.state().games.length;
+  assert.ok(had > 0);
+  api.startSeason('Season 2');
+  assert.equal(api.state().games.length, 0);          // reset
+  assert.equal(api.state().season, 'Season 2');       // renamed
+  assert.equal(api.state().archives.at(-1).games.length, had); // archived, not lost
+});

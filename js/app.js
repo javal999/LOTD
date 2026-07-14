@@ -3,6 +3,13 @@ import { tally, biggestLoser, validateGame } from './tally.mjs';
 import { rank, computeStats, MODES, MIN_GAMES_FOR_RATE, LUCK_BASELINE } from './ranking.mjs';
 
 let mode = MODES.LOSS_RATE;
+let loadError = null;
+
+// Refresh data (supabase) then re-render. Mock's load() is a no-op, so this is cheap there.
+async function reload() {
+  try { await api.load(); loadError = null; } catch (e) { loadError = e.message; }
+  render();
+}
 
 const CROWN = '<svg class="crown" viewBox="0 0 24 24"><path d="M3 7l4 4 5-7 5 7 4-4-2 12H5L3 7Z"/></svg>';
 const CHECK = '<svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>';
@@ -45,15 +52,34 @@ function standingsHTML(ranked) {
   return out;
 }
 
+// Admin toolbar shown when unlocked (in both the populated and empty states).
+function adminBar(unlocked, archives) {
+  if (!unlocked) return '';
+  const past = archives.length
+    ? '<button class="linkbtn" id="past"><svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M6 8v11h12V8"/><path d="M9 12h6"/></svg>Past seasons</button>'
+    : '';
+  return `<div class="admin-row">
+    <button class="linkbtn" id="history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent games</button>
+    <button class="linkbtn" id="export"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>Export</button>
+    <button class="linkbtn" id="newseason"><svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New season</button>
+    ${past}
+  </div>`;
+}
+
 function render() {
-  const { roster, games, season, today, unlocked } = api.state();
+  const app = document.getElementById('app');
+  if (loadError) {
+    app.innerHTML = `<div class="error"><h2>Couldn't reach the server</h2><p>${loadError}</p></div>`;
+    document.body.classList.remove('unlocked');
+    return;
+  }
+  const { roster, games, season, today, unlocked, archives } = api.state();
   const players = tally(games, roster);
   const enough = players.filter((p) => p.gp >= MIN_GAMES_FOR_RATE).length;
   if (mode === MODES.LOSS_RATE && enough < 2) mode = MODES.GAMES_NOT_LOST;
 
   const { ranked, unranked } = rank(players, mode);
   const loser = biggestLoser(games, roster, today);
-  const app = document.getElementById('app');
   document.getElementById('season').textContent = season;
   document.body.classList.toggle('unlocked', unlocked);
 
@@ -62,8 +88,7 @@ function render() {
   lockBtn.setAttribute('aria-label', unlocked ? 'Lock editing' : 'Unlock to log games');
 
   if (players.every((p) => p.gp === 0)) {
-    app.innerHTML = `<div class="empty"><h2>No games yet</h2><p>${unlocked ? 'Tap Log game to record your first result.' : 'Unlock and log your first game to start the season.'}</p></div>`;
-    if (unlocked) app.insertAdjacentHTML('beforeend', `<button class="logbar" id="logbtn">Log game</button>`);
+    app.innerHTML = `${adminBar(unlocked, archives)}<div class="empty"><h2>No games yet</h2><p>${unlocked ? 'Tap Log game to record your first result.' : 'Unlock and log your first game to start the season.'}</p></div>${unlocked ? '<button class="logbar" id="logbtn">Log game</button>' : ''}`;
     wireDynamic();
     return;
   }
@@ -77,7 +102,7 @@ function render() {
 
   app.innerHTML = `
     ${tonight}
-    ${unlocked ? '<div class="admin-row"><button class="linkbtn" id="history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent games</button></div>' : ''}
+    ${adminBar(unlocked, archives)}
     <div class="sort" role="group" aria-label="Ranking mode">
       <button data-mode="${MODES.LOSS_RATE}" aria-pressed="${mode === MODES.LOSS_RATE}">Loss rate</button>
       <button data-mode="${MODES.GAMES_NOT_LOST}" aria-pressed="${mode === MODES.GAMES_NOT_LOST}">Games not lost</button>
@@ -97,6 +122,9 @@ function render() {
 function wireDynamic() {
   document.getElementById('logbtn')?.addEventListener('click', openLog);
   document.getElementById('history')?.addEventListener('click', openHistory);
+  document.getElementById('export')?.addEventListener('click', doExport);
+  document.getElementById('newseason')?.addEventListener('click', openSeason);
+  document.getElementById('past')?.addEventListener('click', openPast);
 }
 
 // ---- Overlay + sheet plumbing ----
@@ -171,10 +199,10 @@ function openLog() {
     const id = Number(e.target.closest('.tile')?.dataset.loser);
     if (id) { loser = id; draw(); }
   });
-  save.addEventListener('click', () => {
+  save.addEventListener('click', async () => {
     try {
-      const game = api.logGame({ players: selected, loser });
-      close(); render(); showToast(game);
+      const game = await api.logGame({ players: selected, loser });
+      close(); await reload(); showToast(game);
     } catch (err) { hint.textContent = err.message; }
   });
   draw();
@@ -190,8 +218,8 @@ function showToast(game) {
     <span><strong>${nameOf(roster, game.loser)}</strong> lost this one</span>
     <button class="toast-undo" id="undo">Undo</button></div>`);
   document.body.appendChild(toast);
-  toast.querySelector('#undo').addEventListener('click', () => {
-    api.undoLast(); toast.remove(); render();
+  toast.querySelector('#undo').addEventListener('click', async () => {
+    try { await api.undoLast(); toast.remove(); await reload(); } catch (e) { alert(e.message); }
   });
   toastTimer = setTimeout(() => toast.remove(), 5000);
 }
@@ -230,20 +258,67 @@ function openHistory() {
     }).join('');
   }
 
-  list.addEventListener('click', (e) => {
+  list.addEventListener('click', async (e) => {
     const t = e.target.closest('button'); if (!t) return;
     const d = t.dataset;
-    if (d.edit) { editingId = Number(d.edit); confirmingId = null; draw(); }
-    else if (d.newloser) { const [gid, lid] = d.newloser.split(':').map(Number); api.editLoser(gid, lid); editingId = null; render(); draw(); }
-    else if (d.del) { confirmingId = Number(d.del); editingId = null; draw(); }
-    else if (d.confirmdel) { api.deleteGame(Number(d.confirmdel)); confirmingId = null; render(); draw(); }
-    else if (d.cancel) { confirmingId = null; draw(); }
+    try {
+      if (d.edit) { editingId = Number(d.edit); confirmingId = null; draw(); }
+      else if (d.newloser) { const [gid, lid] = d.newloser.split(':').map(Number); await api.editLoser(gid, lid); editingId = null; await reload(); draw(); }
+      else if (d.del) { confirmingId = Number(d.del); editingId = null; draw(); }
+      else if (d.confirmdel) { await api.deleteGame(Number(d.confirmdel)); confirmingId = null; await reload(); draw(); }
+      else if (d.cancel) { confirmingId = null; draw(); }
+    } catch (err) { alert(err.message); }
   });
   draw();
+}
+
+// ---- Export a complete backup (JSON, rebuildable) ----
+function doExport() {
+  const data = api.exportData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `LOTD-${data.season.replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ---- Start a new season: archive current + reset (with confirm) ----
+function openSeason() {
+  const { season, archives } = api.state();
+  const box = el(`<div class="sheet"><h2>Start a new season</h2>
+    <p class="sheet-sub">This archives <b>${season}</b> (still viewable and in your export) and resets everyone to zero.</p>
+    <input class="field" id="sname" placeholder="Season name" value="Season ${archives.length + 2}" autocomplete="off">
+    <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
+    <button class="btn-primary" id="do-season">Start season</button></div></div>`);
+  const close = openSheet(box);
+  const input = box.querySelector('#sname');
+  box.querySelector('#do-season').addEventListener('click', async () => {
+    try { await api.startSeason(input.value); close(); await reload(); } catch (e) { alert(e.message); }
+  });
+  input.focus(); input.select();
+}
+
+// ---- View archived seasons, read-only ----
+function openPast() {
+  const { roster, archives } = api.state();
+  const body = archives.slice().reverse().map((a) => {
+    const { ranked } = rank(tally(a.games, roster), MODES.LOSS_RATE);
+    const rows = ranked.map((p) =>
+      `<li class="past-row"><span class="past-rank">${p.rank}</span><span class="past-name">${p.name}</span><span class="past-val">${pct(p.lossRate)}</span></li>`).join('')
+      || '<li class="past-row"><span class="past-name">No games</span></li>';
+    return `<div class="past-season"><h3>${a.season} · ${a.games.length} games</h3><ol class="past-list">${rows}</ol></div>`;
+  }).join('');
+  const box = el(`<div class="sheet"><h2>Past seasons</h2>
+    <p class="sheet-sub">Final standings by loss rate, read-only.</p>
+    <div class="past-wrap">${body}</div>
+    <div class="sheet-actions"><button class="btn-ghost" data-close>Done</button></div></div>`);
+  openSheet(box);
 }
 
 document.getElementById('lock').addEventListener('click', () => {
   if (api.isUnlocked()) { api.lock(); render(); } else openPasscode();
 });
 
-render();
+reload();

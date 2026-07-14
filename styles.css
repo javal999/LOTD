@@ -209,7 +209,7 @@ body.unlocked .wrap { padding-bottom:96px; }
 .toast-undo { border:0; background:transparent; color:var(--gold); font-weight:700; font-size:14px; padding:6px 10px; }
 
 /* Admin: recent-games link */
-.admin-row { display:flex; justify-content:flex-end; margin:-8px 2px 14px; }
+.admin-row { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:4px 16px; margin:-8px 2px 14px; }
 .linkbtn {
   display:inline-flex; align-items:center; gap:6px; border:0; background:transparent;
   color:var(--felt); font-size:14px; font-weight:600; padding:6px 4px;
@@ -233,5 +233,16 @@ body.unlocked .wrap { padding-bottom:96px; }
 }
 .glog-actions button.danger { color:var(--clay); border-color:transparent; background:color-mix(in srgb, var(--clay) 12%, var(--surface-2)); }
 .glog .chip { height:32px; padding:0 12px; font-size:13px; }
+
+/* Past seasons (read-only) */
+.past-wrap { max-height:56vh; overflow-y:auto; margin:0 -2px; }
+.past-season { margin-bottom:18px; }
+.past-season h3 { font-family:var(--font-ui); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-2); margin-bottom:8px; }
+.past-list { list-style:none; padding:0; display:flex; flex-direction:column; }
+.past-row { display:flex; align-items:center; gap:12px; padding:8px 2px; border-bottom:1px solid var(--line); }
+.past-row:last-child { border-bottom:0; }
+.past-rank { width:20px; color:var(--ink-2); font-weight:700; font-size:14px; }
+.past-name { flex:1; font-weight:600; }
+.past-val { font-family:var(--font-display); font-weight:600; font-size:18px; }
 
 @media (prefers-reduced-motion: reduce) { *, .sheet { transition:none !important; animation:none !important; } }
