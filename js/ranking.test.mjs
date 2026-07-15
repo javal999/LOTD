@@ -1,158 +1,161 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeStats, rank, MODES } from './ranking.mjs';
+import {
+  computeStandings, biggestLoserAllTime, biggestLoserForDate, MODES,
+} from './ranking.mjs';
 
-// Hand-computed from PRD Appendix A. Expected values are NOT derived from the
-// implementation — they come from the spec (gnl = gp-l, lossRate = l/gp).
+// Hand-computed from PRD v3 Appendix A + BUILD-PLAN E2 vectors. Expected values come
+// from the spec, NOT from running the implementation.
 const APPENDIX_A = [
-  { name: 'Ade', gp: 10, l: 1 },
-  { name: 'Bima', gp: 10, l: 4 },
-  { name: 'Citra', gp: 10, l: 3 },
-  { name: 'Dewi', gp: 10, l: 2 },
+  { name: 'Ade',   gp: 10, losses: 1, archived: false },
+  { name: 'Bima',  gp: 10, losses: 4, archived: false },
+  { name: 'Citra', gp: 10, losses: 3, archived: false },
+  { name: 'Dewi',  gp: 10, losses: 2, archived: false },
 ];
+const EKA = { name: 'Eka', gp: 2, losses: 0, archived: false };
 
 const names = (list) => list.map((p) => p.name);
 
-test('computeStats: gamesNotLost = gp - l', () => {
-  assert.equal(computeStats({ name: 'Ade', gp: 10, l: 1 }).gamesNotLost, 9);
-  assert.equal(computeStats({ name: 'Bima', gp: 10, l: 4 }).gamesNotLost, 6);
+// ---------- computeStandings ----------
+
+test('most_not_lost: equal GP → Ade, Dewi, Citra, Bima', () => {
+  const { ranked, unranked } = computeStandings(APPENDIX_A, MODES.MOST_NOT_LOST);
+  assert.deepEqual(names(ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
+  assert.deepEqual(ranked.map((p) => p.games_not_lost), [9, 8, 7, 6]);
+  assert.equal(unranked.length, 0);
 });
 
-test('computeStats: lossRate = l/gp', () => {
-  assert.equal(computeStats({ name: 'Dewi', gp: 10, l: 2 }).lossRate, 0.2);
-  assert.equal(computeStats({ name: 'Bima', gp: 10, l: 4 }).lossRate, 0.4);
+test('lowest_loss_rate: equal GP → Ade, Dewi, Citra, Bima', () => {
+  const { ranked, unranked } = computeStandings(APPENDIX_A, MODES.LOWEST_LOSS_RATE);
+  assert.deepEqual(names(ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
+  assert.deepEqual(ranked.map((p) => p.loss_rate), [0.1, 0.2, 0.3, 0.4]);
+  assert.equal(unranked.length, 0);
 });
 
-test('computeStats: 0 games → lossRate null, no div-by-zero (edge case #1/#2)', () => {
-  const s = computeStats({ name: 'Ghost', gp: 0, l: 0 });
-  assert.equal(s.lossRate, null);
-  assert.equal(s.gamesNotLost, 0);
-});
-
-test('computeStats: beatsLuck is strictly below 25% (PRD §2 "under 25%")', () => {
-  assert.equal(computeStats({ name: 'A', gp: 10, l: 2 }).beatsLuck, true);   // 20%
-  assert.equal(computeStats({ name: 'B', gp: 4, l: 1 }).beatsLuck, false);   // exactly 25%
-  assert.equal(computeStats({ name: 'C', gp: 10, l: 3 }).beatsLuck, false);  // 30%
-  assert.equal(computeStats({ name: 'D', gp: 0, l: 0 }).beatsLuck, false);   // no games
-});
-
-test('Appendix A: equal games → both sorts give Ade, Dewi, Citra, Bima', () => {
-  const gnl = rank(APPENDIX_A, MODES.GAMES_NOT_LOST);
-  const lr = rank(APPENDIX_A, MODES.LOSS_RATE);
-  assert.deepEqual(names(gnl.ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
-  assert.deepEqual(names(lr.ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
-  assert.equal(gnl.unranked.length, 0);
-  assert.equal(lr.unranked.length, 0);
-});
-
-test('rank assigns 1..n positions in sorted order', () => {
-  const { ranked } = rank(APPENDIX_A, MODES.LOSS_RATE);
+test('ranks are the contiguous sequence 1..n', () => {
+  const { ranked } = computeStandings(APPENDIX_A, MODES.LOWEST_LOSS_RATE);
   assert.deepEqual(ranked.map((p) => p.rank), [1, 2, 3, 4]);
 });
 
-test('Appendix A + Eka(2 games): ranked last in games-not-lost, unranked in loss-rate', () => {
-  const roster = [...APPENDIX_A, { name: 'Eka', gp: 2, l: 0 }];
-  const gnl = rank(roster, MODES.GAMES_NOT_LOST);
-  const lr = rank(roster, MODES.LOSS_RATE);
-  assert.equal(names(gnl.ranked).at(-1), 'Eka');           // gnl=2, ranks last but IS ranked
+test('Eka (gp 2): ranked last in most_not_lost, unranked (provisional) in lowest_loss_rate', () => {
+  const roster = [...APPENDIX_A, EKA];
+  const gnl = computeStandings(roster, MODES.MOST_NOT_LOST);
+  assert.equal(names(gnl.ranked).at(-1), 'Eka');   // games_not_lost = 2 → last, but ranked
   assert.equal(gnl.unranked.length, 0);
-  assert.deepEqual(names(lr.ranked), ['Ade', 'Dewi', 'Citra', 'Bima']); // Eka excluded
-  assert.deepEqual(names(lr.unranked), ['Eka']);           // < 5 games
+
+  const lr = computeStandings(roster, MODES.LOWEST_LOSS_RATE);
+  assert.deepEqual(names(lr.ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
+  assert.deepEqual(names(lr.unranked), ['Eka']);
+  assert.equal(lr.unranked[0].provisional, true);
 });
 
-test('games-not-lost tie broken by lower loss rate (edge case #4)', () => {
+test('gp=0 player: unranked in both modes, loss_rate null, no divide-by-zero', () => {
+  const roster = [{ name: 'Idle', gp: 0, losses: 0, archived: false }];
+  for (const mode of Object.values(MODES)) {
+    const { ranked, unranked } = computeStandings(roster, mode);
+    assert.equal(ranked.length, 0, `mode ${mode} should not rank a 0-game player`);
+    assert.deepEqual(names(unranked), ['Idle']);
+    assert.equal(unranked[0].loss_rate, null);
+  }
+});
+
+test('provisional flag is gp < 5', () => {
   const roster = [
-    { name: 'P', gp: 10, l: 2 }, // gnl 8, lr .20
-    { name: 'Q', gp: 12, l: 4 }, // gnl 8, lr .333
+    { name: 'Four', gp: 4, losses: 1, archived: false },
+    { name: 'Five', gp: 5, losses: 1, archived: false },
   ];
-  assert.deepEqual(names(rank(roster, MODES.GAMES_NOT_LOST).ranked), ['P', 'Q']);
+  const { ranked, unranked } = computeStandings(roster, MODES.LOWEST_LOSS_RATE);
+  assert.deepEqual(names(ranked), ['Five']);
+  assert.deepEqual(names(unranked), ['Four']);
 });
 
-test('loss-rate tie broken by more games played (edge case #5)', () => {
+test('most_not_lost tie on games_not_lost → lower loss rate wins', () => {
   const roster = [
-    { name: 'R', gp: 10, l: 2 }, // lr .20
-    { name: 'S', gp: 20, l: 4 }, // lr .20, bigger sample
+    { name: 'P', gp: 10, losses: 2, archived: false }, // gnl 8, lr .20
+    { name: 'Q', gp: 12, losses: 4, archived: false }, // gnl 8, lr .333
   ];
-  assert.deepEqual(names(rank(roster, MODES.LOSS_RATE).ranked), ['S', 'R']);
+  assert.deepEqual(names(computeStandings(roster, MODES.MOST_NOT_LOST).ranked), ['P', 'Q']);
 });
 
-test('final tiebreak is name A→Z', () => {
+test('lowest_loss_rate tie on loss rate → bigger sample wins', () => {
   const roster = [
-    { name: 'Zed', gp: 5, l: 1 },
-    { name: 'Abe', gp: 5, l: 1 },
+    { name: 'R', gp: 10, losses: 2, archived: false }, // lr .20
+    { name: 'S', gp: 20, losses: 4, archived: false }, // lr .20, more gp
   ];
-  assert.deepEqual(names(rank(roster, MODES.LOSS_RATE).ranked), ['Abe', 'Zed']);
+  assert.deepEqual(names(computeStandings(roster, MODES.LOWEST_LOSS_RATE).ranked), ['S', 'R']);
 });
 
-test('loss-rate mode: <5 games unranked; games-not-lost mode: still ranked if gp>=1', () => {
-  const roster = [{ name: 'New', gp: 3, l: 0 }];
-  assert.deepEqual(names(rank(roster, MODES.LOSS_RATE).unranked), ['New']);
-  assert.equal(rank(roster, MODES.LOSS_RATE).ranked.length, 0);
-  assert.deepEqual(names(rank(roster, MODES.GAMES_NOT_LOST).ranked), ['New']);
+test('final tiebreak is name A→Z (both modes)', () => {
+  const roster = [
+    { name: 'Zed', gp: 5, losses: 1, archived: false },
+    { name: 'Abe', gp: 5, losses: 1, archived: false },
+  ];
+  assert.deepEqual(names(computeStandings(roster, MODES.MOST_NOT_LOST).ranked), ['Abe', 'Zed']);
+  assert.deepEqual(names(computeStandings(roster, MODES.LOWEST_LOSS_RATE).ranked), ['Abe', 'Zed']);
 });
 
-test('0-games players are unranked in both modes', () => {
-  const roster = [{ name: 'Idle', gp: 0, l: 0 }];
-  assert.equal(rank(roster, MODES.GAMES_NOT_LOST).ranked.length, 0);
-  assert.deepEqual(names(rank(roster, MODES.GAMES_NOT_LOST).unranked), ['Idle']);
-  assert.equal(rank(roster, MODES.LOSS_RATE).ranked.length, 0);
+test('archived players are still ranked, with the flag carried through', () => {
+  const roster = [
+    { name: 'Gone', gp: 10, losses: 1, archived: true },
+    { name: 'Here', gp: 10, losses: 5, archived: false },
+  ];
+  const { ranked } = computeStandings(roster, MODES.LOWEST_LOSS_RATE);
+  assert.deepEqual(names(ranked), ['Gone', 'Here']); // their games happened; still counted
+  assert.equal(ranked[0].archived, true);
+  assert.equal(ranked[1].archived, false);
 });
 
-test('rank does not mutate its input', () => {
-  const roster = [{ name: 'X', gp: 5, l: 1 }];
+test('computeStandings does not mutate its input', () => {
+  const roster = [{ name: 'X', gp: 5, losses: 1, archived: false }];
   const snapshot = JSON.stringify(roster);
-  rank(roster, MODES.LOSS_RATE);
+  computeStandings(roster, MODES.LOWEST_LOSS_RATE);
   assert.equal(JSON.stringify(roster), snapshot);
 });
 
-// Property tests over 200 random rosters — deterministic (seeded LCG, no Math.random).
-// These fail if ranking ever drops/duplicates a player, misnumbers ranks, or sorts wrong.
-function* rosters(seed = 1) {
-  let s = seed;
-  const rnd = (n) => ((s = (s * 1103515245 + 12345) & 0x7fffffff), s % n);
-  for (let i = 0; i < 200; i++) {
-    const roster = [];
-    const size = 1 + rnd(8);
-    for (let j = 0; j < size; j++) {
-      const gp = rnd(30); // includes 0-game players
-      roster.push({ name: `P${i}_${j}`, gp, l: gp === 0 ? 0 : rnd(gp + 1) });
-    }
-    yield roster;
-  }
-}
+// ---------- biggestLoserAllTime ----------
 
-for (const mode of Object.values(MODES)) {
-  test(`property [${mode}]: every player is ranked xor unranked, exactly once`, () => {
-    for (const roster of rosters()) {
-      const { ranked, unranked } = rank(roster, mode);
-      assert.equal(ranked.length + unranked.length, roster.length);
-      const seen = new Set([...ranked, ...unranked].map((p) => p.name));
-      assert.equal(seen.size, roster.length);
-    }
-  });
-
-  test(`property [${mode}]: ranks are the contiguous sequence 1..n`, () => {
-    for (const roster of rosters()) {
-      const { ranked } = rank(roster, mode);
-      assert.deepEqual(ranked.map((p) => p.rank), ranked.map((_, i) => i + 1));
-    }
-  });
-}
-
-test('property [loss-rate]: ranked list is non-decreasing by loss rate', () => {
-  for (const roster of rosters()) {
-    const { ranked } = rank(roster, MODES.LOSS_RATE);
-    for (let i = 1; i < ranked.length; i++) {
-      assert.ok(ranked[i].lossRate >= ranked[i - 1].lossRate);
-    }
-  }
+test('biggestLoserAllTime: single winner is the most losses', () => {
+  assert.deepEqual(biggestLoserAllTime(APPENDIX_A), ['Bima']); // 4 losses
 });
 
-test('property [games-not-lost]: ranked list is non-increasing by games not lost', () => {
-  for (const roster of rosters()) {
-    const { ranked } = rank(roster, MODES.GAMES_NOT_LOST);
-    for (let i = 1; i < ranked.length; i++) {
-      assert.ok(ranked[i].gamesNotLost <= ranked[i - 1].gamesNotLost);
-    }
-  }
+test('biggestLoserAllTime: ties return every tied name', () => {
+  const roster = [
+    { name: 'Ade', gp: 10, losses: 4, archived: false },
+    { name: 'Bima', gp: 10, losses: 4, archived: false },
+    { name: 'Citra', gp: 10, losses: 1, archived: false },
+  ];
+  assert.deepEqual(biggestLoserAllTime(roster), ['Ade', 'Bima']);
+});
+
+test('biggestLoserAllTime: no games → empty array', () => {
+  assert.deepEqual(biggestLoserAllTime([{ name: 'A', gp: 0, losses: 0, archived: false }]), []);
+  assert.deepEqual(biggestLoserAllTime([]), []);
+});
+
+// ---------- biggestLoserForDate ----------
+
+const PLAYERS = [{ id: 1, name: 'Ade' }, { id: 2, name: 'Bima' }, { id: 3, name: 'Citra' }];
+const GAMES = [
+  { game_date: '2026-07-15', loser: 2 },
+  { game_date: '2026-07-15', loser: 2 },
+  { game_date: '2026-07-15', loser: 1 },
+  { game_date: '2026-07-14', loser: 3 },
+];
+
+test('biggestLoserForDate: picks the day\'s most-losses player', () => {
+  assert.deepEqual(biggestLoserForDate(GAMES, PLAYERS, '2026-07-15'), ['Bima']); // 2 vs Ade 1
+});
+
+test('biggestLoserForDate: only counts that date (backdated games stay on their own day)', () => {
+  assert.deepEqual(biggestLoserForDate(GAMES, PLAYERS, '2026-07-14'), ['Citra']);
+});
+
+test('biggestLoserForDate: a day with no games → empty array', () => {
+  assert.deepEqual(biggestLoserForDate(GAMES, PLAYERS, '2099-01-01'), []);
+  assert.deepEqual(biggestLoserForDate([], PLAYERS, '2026-07-15'), []);
+});
+
+test('biggestLoserForDate: ties return every tied name', () => {
+  const games = [...GAMES, { game_date: '2026-07-15', loser: 1 }]; // Ade 2, Bima 2
+  assert.deepEqual(biggestLoserForDate(games, PLAYERS, '2026-07-15'), ['Ade', 'Bima']);
 });

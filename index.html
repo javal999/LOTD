@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme-auto>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -18,7 +18,7 @@
       </span>
       <div>
         <h1>LOTD</h1>
-        <p class="season">Loser of the Day · <span id="season">Season 1</span></p>
+        <p class="tag">Loser of the Day</p>
       </div>
       <span class="spacer"></span>
       <button class="lock-btn" id="lock" aria-label="Unlock to log games">
@@ -26,6 +26,13 @@
         Unlock
       </button>
     </header>
+
+    <div class="board-bar" id="board-bar" hidden>
+      <label class="sr-only" for="board">Leaderboard</label>
+      <select id="board" class="board-select"></select>
+      <span id="board-admin" class="board-admin"></span>
+    </div>
+
     <main id="app" aria-live="polite"></main>
   </div>
   <script type="module" src="js/app.js"></script>
