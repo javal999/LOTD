@@ -1,9 +1,9 @@
 # Build plan — Card game standings tracker
 
-**Companion to:** TRD-2026-001-card-standings-tracker.md and PRD-card-game-standings-tracker.md (v2)
+**Companion to:** TRD-2026-001-card-standings-tracker.md and PRD-card-game-standings-tracker.md (v3)
 **Stack:** Supabase (Postgres + Edge Functions) + vanilla JS static frontend, hosted on Netlify or Vercel
 **For:** building with Claude Code, epic by epic
-**Date:** 2026-07-14
+**Date:** 2026-07-14 (aligned to PRD v3: leaderboards, in-UI player management, dated logging, loser spotlight)
 
 ---
 
@@ -11,16 +11,18 @@
 
 Build in order. Each epic is one Claude Code session. Copy the prompt block into Claude Code, let it work, then check it against the acceptance criteria and run the tests before moving on. The epics follow the vibe-code-reviewer phase gates: spec is set (the TRD), tests come before implementation, and the last epic is the security and verification gate.
 
-Two things only a human should do, per the reviewer: approve this plan before Claude Code starts, and read the final diff before you deploy. Do not rubber-stamp.
+Two things only a human should do, per the reviewer: approve this plan before Claude Code starts, and read the final diff before you deploy.
+
+**Model in one line:** a *leaderboard* is the top-level tracker (it replaced "seasons"). Players and games belong to a leaderboard. Every game is exactly 4 players and 1 loser, on a date that defaults to today and can't be in the future.
 
 **Dependency order:**
 
 ```
-E0 scaffold ─► E1 schema ─► E2 ranking lib ─┬─► E4 read UI ─► E5 admin UI ─► E6 extras ─► E7 ship
-                            └─► E3 edge fn ──┘
+E0 scaffold ─► E1 schema ─► E2 ranking+spotlight lib ─┬─► E4 read UI ─► E5 admin ─► E6 spotlight+export ─► E7 ship
+                            └─► E3 edge fn ────────────┘
 ```
 
-E2 (pure ranking logic) and E3 (write path) can be built in either order after E1. Everything else is linear.
+E2 (pure logic) and E3 (write path) can be built in either order after E1. Everything else is linear.
 
 ---
 
@@ -31,227 +33,227 @@ E2 (pure ranking logic) and E3 (write path) can be built in either order after E
 **Depends on:** nothing.
 
 **Claude Code prompt:**
-> Create a minimal static web project for a card game standings tracker. No framework, no build step: `index.html`, `app.js`, `styles.css`, plus a `supabase/` folder for migrations and Edge Functions. Add a `README.md` documenting local run (open index.html or `npx serve`) and the two environment values the frontend needs at runtime: `SUPABASE_URL` and `SUPABASE_ANON_KEY`, loaded from a `config.js` that is gitignored. Add a `.gitignore` covering `config.js`, `.env`, and `node_modules`. Do not hardcode any keys. Initialize the Supabase CLI project structure under `supabase/`. Stop and show me the file tree before writing any feature code.
+> Create a minimal static web project for a card game standings tracker. No framework, no build step: `index.html`, `app.js`, `styles.css`, plus a `supabase/` folder for migrations and Edge Functions. The app tracks multiple "leaderboards"; each has its own players and games. Add a `README.md` documenting local run (open index.html or `npx serve`) and the two runtime env values the frontend needs: `SUPABASE_URL` and `SUPABASE_ANON_KEY`, loaded from a gitignored `config.js` (add a `config.example.js`). Add a `.gitignore` covering `config.js`, `.env`, `node_modules`. Do not hardcode any keys. Initialize the Supabase CLI structure under `supabase/`. Stop and show me the file tree before writing feature code.
 
 **Acceptance criteria:**
-- File tree exists; `index.html` loads locally with no errors.
-- No secrets committed; `config.js` is gitignored and has a `config.example.js` template.
-- `supabase/` is initialized for migrations and functions.
+- File tree exists; `index.html` loads locally with a clean console.
+- No secrets committed; `config.js` gitignored with an example template.
+- `supabase/` initialized for migrations and functions.
 
-**Tests:** none yet (scaffold). Confirm the page opens and the console is clean.
+**Tests:** none (scaffold). Confirm the page opens.
 
-**Rollback:** delete the folder. Nothing external created yet.
+**Rollback:** delete the folder.
 
 ---
 
 ## Epic 1 — Database schema, constraints, view, RLS, seed
 
-**Goal:** the shared data model with the invariant enforced in the database, public read-only access, and the 4 players seeded.
+**Goal:** the shared data model with the invariant enforced in the database, public read-only access, and one seeded leaderboard with 4 players. **No `seasons` table** (leaderboards replace it).
 
 **Depends on:** E0.
 
-**Spec (from the TRD):** three tables (`players`, `seasons`, `games`), one aggregation view (`v_standings`), RLS that allows anon SELECT and denies anon writes.
+**Spec (from TRD section 5):** three tables (`leaderboards`, `players`, `games`), one aggregation view (`v_standings`) scoped by leaderboard, RLS that allows anon SELECT and denies anon writes.
 
 **Claude Code prompt:**
-> Write a Supabase SQL migration under `supabase/migrations/` for a card game standings tracker. Requirements, exactly:
-> - `players(id bigint identity pk, name text not null unique, active boolean not null default true, created_at timestamptz default now())`.
-> - `seasons(id bigint identity pk, name text not null, started_at timestamptz not null default now(), ended_at timestamptz, is_active boolean not null default true)`. Add a partial unique index so at most one season has `is_active = true`.
-> - `games(id bigint identity pk, season_id bigint not null references seasons(id), played_at timestamptz not null default now(), p1 bigint not null references players(id), p2 ... p3 ... p4 bigint not null references players(id), loser bigint not null references players(id), created_at timestamptz default now())`.
-> - On `games`, add `CHECK` constraints: all four of p1,p2,p3,p4 are distinct; and `loser IN (p1,p2,p3,p4)`. These enforce "exactly 4 distinct players, exactly 1 loser who was at the table" at the database level.
-> - Create view `v_standings` for the active season: for every player, `gp` = number of games they were in (any of p1..p4), and `losses` = number of games where they were the loser. Do not compute loss rate or rank in SQL; the frontend does that.
-> - Enable RLS on all three tables. Add policies so the `anon` role can `SELECT` on players, seasons, games, and can read `v_standings`. Add no anon INSERT/UPDATE/DELETE policies (writes stay denied for anon).
-> - A seed migration inserting one active season "Season 1" and four players (use placeholder names Player1..Player4 I can rename).
-> Show me the SQL before applying it. Then tell me exactly how to apply it to my Supabase dev project.
+> Write a Supabase SQL migration under `supabase/migrations/` for a card game standings tracker with multiple leaderboards. Exactly:
+> - `leaderboards(id bigint identity pk, name text not null unique, created_at timestamptz default now())`.
+> - `players(id bigint identity pk, leaderboard_id bigint not null references leaderboards(id) on delete cascade, name text not null, archived boolean not null default false, created_at timestamptz default now())`. Add `unique(leaderboard_id, name)`.
+> - `games(id bigint identity pk, leaderboard_id bigint not null references leaderboards(id) on delete cascade, game_date date not null default current_date, p1 bigint not null references players(id), p2 ... p3 ... p4 bigint not null references players(id), loser bigint not null references players(id), created_at timestamptz default now())`. The player foreign keys must be ON DELETE RESTRICT (default), so a player with games cannot be hard-deleted.
+> - On `games`, add CHECK constraints: p1,p2,p3,p4 all distinct; `loser IN (p1,p2,p3,p4)`; and a loose future guard `game_date <= current_date + 1` (timezone slack; strict future-blocking is enforced in the Edge Function).
+> - Create view `v_standings`: for each `(leaderboard_id, player)`, `gp` = games the player was in (any of p1..p4), `losses` = games where they were the loser. Include `archived`. Do not compute loss rate or rank in SQL; the frontend does that.
+> - Enable RLS on all three tables. Add policies so the `anon` role can `SELECT` on leaderboards, players, games, and read `v_standings`. Add no anon INSERT/UPDATE/DELETE policies.
+> - A seed migration: one leaderboard "Leaderboard 1" and four players Player1..Player4 in it (I will rename them).
+> Show me the SQL before applying, then tell me exactly how to apply it to my Supabase dev project.
 
 **Acceptance criteria:**
-- Migration applies cleanly to a fresh Supabase project.
-- Inserting a game with a repeated player, or a `loser` not among p1..p4, is rejected by the DB.
-- Only one season can be active.
-- With the anon key, a SELECT on `v_standings` returns rows; an INSERT into `games` is rejected.
+- Migration applies cleanly to a fresh project.
+- A game with a repeated player, or a `loser` not among p1..p4, is rejected.
+- Deleting a leaderboard cascades to its players and games; deleting a player who has games is rejected by the FK (the app archives instead).
+- Anon key: SELECT on `v_standings` works; INSERT into `games` is rejected.
 
-**Tests (run against the dev project):**
+**Tests (against the dev project):**
 1. Insert a valid game → succeeds.
-2. Insert a game with p1 = p2 → rejected (distinct CHECK).
-3. Insert a game with loser = some player not in p1..p4 → rejected.
-4. Set a second season `is_active = true` → rejected by the partial unique index.
-5. Anon-key INSERT into `games` → rejected by RLS. Anon-key SELECT on `v_standings` → allowed.
+2. Insert a game with p1 = p2 → rejected.
+3. Insert a game with loser not in p1..p4 → rejected.
+4. Delete a leaderboard with games → its players and games are gone (cascade).
+5. Hard-delete a player who has games → rejected by FK RESTRICT.
+6. Anon-key INSERT into `games` → rejected by RLS; anon-key SELECT on `v_standings` → allowed.
 
-**Rollback:** `down` migration drops the view and tables. Data is dev-only at this stage.
+**Rollback:** `down` migration drops the view and tables. Dev-only data.
 
 ---
 
-## Epic 2 — Ranking library (pure JavaScript, test-first)
+## Epic 2 — Ranking and spotlight library (pure JavaScript, test-first)
 
-**Goal:** the standings math the whole app depends on, as a pure module with no database, so it is fully unit-testable. This is the highest-value code to get right.
+**Goal:** the standings math and the two biggest-loser calculations, as a pure module with no database, fully unit-testable. Highest-value code to get right.
 
-**Depends on:** E1 (for the shape of the input rows).
+**Depends on:** E1 (for input row shape).
 
-**Spec (from PRD section 2 and 7.5):** input is an array of `{ name, gp, losses }`. Output is a ranked list with `games_not_lost = gp - losses`, `loss_rate = losses/gp` (or null if gp = 0), a `provisional` flag when `gp < 5`, and a `rank` per the chosen sort with the tiebreakers below.
+**Spec (PRD 2, 7.5, 14.4):**
+- `computeStandings(rows, mode)`: `rows` = `[{name, gp, losses, archived}]`; `mode` = `"most_not_lost" | "lowest_loss_rate"`. Output `{ ranked:[...rank 1..n], unranked:[...] }`.
+- `biggestLoserAllTime(rows)`: the name(s) with the most `losses` (absolute). Returns an array (ties → multiple).
+- `biggestLoserForDate(games, players, dateStr)`: among games whose `game_date === dateStr`, the player(s) with the most losses that day. Returns an array.
 
-**Write the tests first.** Use these hand-computed vectors from the PRD:
+**Write tests first**, using these hand-computed vectors (PRD Appendix A):
 
-Input (all played 10):
-```
-Ade   gp10 l1   Bima gp10 l4   Citra gp10 l3   Dewi gp10 l2
-```
-- Sort "most games not lost" → Ade(9), Dewi(8), Citra(7), Bima(6).
-- Sort "lowest loss rate" → Ade(10%), Dewi(20%), Citra(30%), Bima(40%).
-- Add Eka gp2 l0: in "most games not lost" Eka ranks last (2 not-lost). In "lowest loss rate" Eka is `provisional` (gp<5), listed below the ranked four, no rank, not position 1 on 0%.
+Input (all played 10): `Ade l1, Bima l4, Citra l3, Dewi l2`.
+- `most_not_lost` → Ade(9), Dewi(8), Citra(7), Bima(6).
+- `lowest_loss_rate` → Ade(10%), Dewi(20%), Citra(30%), Bima(40%).
+- Add `Eka gp2 l0`: `most_not_lost` → Eka last (2); `lowest_loss_rate` → Eka unranked (provisional, gp<5).
+- `biggestLoserAllTime` → `["Bima"]` (4 losses, the most).
+- Two players tied at the top of losses → both names returned.
 
 **Claude Code prompt:**
-> First write a test file for a pure ranking module `ranking.js`, then implement it to pass. Do not write the implementation before the tests. The module exports `computeStandings(rows, mode)` where `rows` is `[{name, gp, losses}]` and `mode` is `"most_not_lost"` or `"lowest_loss_rate"`.
-> Rules:
-> - `games_not_lost = gp - losses`; `loss_rate = losses / gp`, or `null` when `gp === 0`.
-> - A player with `gp < 5` is `provisional: true`.
-> - Mode `most_not_lost`: rank all players by games_not_lost descending. Tiebreak: lower loss_rate, then more gp, then name A→Z.
-> - Mode `lowest_loss_rate`: rank only non-provisional players by loss_rate ascending. Tiebreak: more gp, then more games_not_lost, then name A→Z. Provisional players (and gp=0) are returned in a separate `unranked` list with no rank.
-> - Output: `{ ranked: [...with rank 1..n], unranked: [...] }`.
-> Cover these cases as tests: the 4-player equal-GP vectors I give you (both modes), the Eka provisional case (both modes), a gp=0 player (unranked, loss_rate null, no divide-by-zero), and a tie broken by each tiebreak level. Then implement and make all tests green. Show me the failing tests first, then the passing run.
+> First write a test file for a pure module `ranking.js`, then implement it to pass. Do not implement before the tests exist and fail.
+> Exports:
+> - `computeStandings(rows, mode)`: `rows` = `[{name, gp, losses, archived}]`. `games_not_lost = gp - losses`; `loss_rate = losses/gp` or `null` if `gp===0`; `provisional = gp < 5`. Mode `most_not_lost`: rank all by games_not_lost desc; tiebreak lower loss_rate, then more gp, then name A→Z. Mode `lowest_loss_rate`: rank only non-provisional by loss_rate asc; tiebreak more gp, then more games_not_lost, then name A→Z; provisional and gp=0 go to a separate `unranked` list. Archived players are still included (their games happened); just carry the `archived` flag through.
+> - `biggestLoserAllTime(rows)`: return an array of the name(s) with the maximum `losses`. Empty array if no games.
+> - `biggestLoserForDate(games, players, dateStr)`: `games` = `[{game_date, loser}]` (player id), `players` = `[{id,name}]`. Among games with `game_date === dateStr`, return the name(s) with the most losses that day. Empty array if none.
+> Cover as tests: the equal-GP vectors (both modes), the Eka provisional case (both modes), a gp=0 player (unranked, null loss_rate, no divide-by-zero), each tiebreak level, `biggestLoserAllTime` single and tie, `biggestLoserForDate` for a day with games and a day with none. Show failing tests first, then green.
 
 **Acceptance criteria:**
-- Tests are written before the implementation and fail first (no tautological tests).
-- All vectors above pass. No divide-by-zero. Provisional players never take a loss-rate rank.
+- Tests written before implementation and fail first (no tautological tests).
+- All vectors pass. No divide-by-zero. Provisional players never take a loss-rate rank. Ties return every tied name.
 
-**Tests:** the vectors above, plus each tiebreak level, plus gp=0.
-
-**Rollback:** revert the two files. Pure code, no side effects.
+**Rollback:** revert the two files. Pure code.
 
 ---
 
-## Epic 3 — Admin write Edge Function (passcode-gated)
+## Epic 3 — Admin write Edge Function (passcode-gated, 10 actions)
 
-**Goal:** the only write path. Holds the write secret server-side so the public site can never corrupt data.
+**Goal:** the only write path. Holds the write secret server-side; covers leaderboards, players, and games.
 
 **Depends on:** E1.
 
-**Spec (from TRD 5c):** `POST` `{ action, passcode, payload }`; actions `log_game | undo_last | edit_loser | delete_game | start_season`; returns `{ ok, data?, error? }`.
+**Spec (TRD 5c):** `POST` `{ action, passcode, payload }`; returns `{ ok, data?, error? }`. Actions: `create_leaderboard, rename_leaderboard, delete_leaderboard, add_player, delete_player, restore_player, log_game, undo_last, edit_loser, delete_game`.
 
 **Claude Code prompt:**
-> Write a Supabase Edge Function named `admin` (Deno/TypeScript) that is the only way to write data. It reads two secrets from the function environment: `ADMIN_PASSCODE` and `SUPABASE_SERVICE_ROLE_KEY` (never expose either to the client). Request body: `{ action, passcode, payload }`.
-> - Reject with 401 if `passcode` does not match `ADMIN_PASSCODE`. Use a constant-time comparison.
-> - Otherwise use the service role key (a Supabase client) to perform the action against the active season:
->   - `log_game`: payload `{ p1, p2, p3, p4, loser }`. Re-validate that the four players are distinct and `loser` is one of them BEFORE inserting (defense in depth; the DB also enforces it). Insert into `games` with the active `season_id`.
->   - `undo_last`: delete the most recently created game in the active season.
->   - `edit_loser`: payload `{ game_id, loser }`. Verify `loser` is one of that game's four players, then update.
->   - `delete_game`: payload `{ game_id }`. Delete it.
->   - `start_season`: payload `{ name }`. Set the current active season `is_active=false, ended_at=now()`, then insert a new active season.
-> - Validate payloads; on invalid input or a constraint violation return 400 with a short message. Never return a partial success.
-> - Restrict CORS to my site origin (make the origin an env value).
-> - Log each write (action, ok/error, timestamp) via `console.log` so it appears in Supabase function logs.
-> Write tests for: wrong passcode → 401; valid log_game → row inserted; log_game with a duplicate player → 400 and nothing inserted; edit_loser to a player not in the game → 400; start_season deactivates the old season and creates exactly one active season. Show the tests, then the implementation.
+> Write a Supabase Edge Function `admin` (Deno/TypeScript) that is the only way to write data. It reads `ADMIN_PASSCODE` and `SUPABASE_SERVICE_ROLE_KEY` from the function environment; never expose either to the client. Body: `{ action, passcode, payload }`. Reject with 401 (constant-time compare) if the passcode is wrong. Otherwise use the service role key to perform the action:
+> - `create_leaderboard {name}`: insert (name unique).
+> - `rename_leaderboard {leaderboard_id, name}`.
+> - `delete_leaderboard {leaderboard_id}`: delete (DB cascades players and games).
+> - `add_player {leaderboard_id, name}`: insert (unique within the leaderboard).
+> - `delete_player {player_id}`: if the player has 0 games, hard-delete; otherwise set `archived = true`. Decide server-side; return which happened.
+> - `restore_player {player_id}`: set `archived = false`.
+> - `log_game {leaderboard_id, game_date, p1, p2, p3, p4, loser}`: validate, before inserting, that `game_date` is not after today (use a caller-supplied timezone offset or an ISO date the client computed as local today, and reject anything greater); the four players are distinct, not archived, and all belong to `leaderboard_id`; and `loser` is one of them. Insert with that `leaderboard_id` and `game_date`.
+> - `undo_last {leaderboard_id}`: delete the most recently created game in that leaderboard.
+> - `edit_loser {game_id, loser}`: verify `loser` is one of that game's four players, then update.
+> - `delete_game {game_id}`: delete.
+> Validate payloads; on invalid input, future date, or constraint violation return 400 with a short message and no partial write. Restrict CORS to my site origin (env value). Log each write (action, leaderboard_id, ok/error, timestamp) via console for Supabase function logs.
+> Write tests for: wrong passcode → 401; create_leaderboard then add_player then log_game happy path; log_game with a future date → 400; log_game with a player from another leaderboard → 400; log_game with a duplicate player → 400; delete_player with games → archived (not deleted); delete_player with no games → hard-deleted; edit_loser to a non-participant → 400. Show tests, then implementation.
 
 **Acceptance criteria:**
-- Wrong passcode never writes. Neither secret is ever sent to the client.
-- Every action works and every invalid input returns 400 with no partial write.
+- Wrong passcode never writes; neither secret reaches the client.
+- Future dates, cross-leaderboard players, duplicate players, and non-participant losers are all rejected with no partial write.
+- delete_player archives when there is history, hard-deletes when there is none.
 - CORS limited to the site origin.
 
-**Tests:** the five listed in the prompt, run against the dev project.
-
-**Rollback:** delete the function (Supabase keeps the previous deployed version until you redeploy). No schema change.
+**Rollback:** delete/redeploy the function. No schema change.
 
 ---
 
-## Epic 4 — Frontend: standings read and table
+## Epic 4 — Frontend: leaderboard switcher, standings read, table
 
-**Goal:** anyone opens the URL and sees the live standings with both sorts and the legend.
+**Goal:** anyone opens the URL, picks a leaderboard, and sees its live standings with both sorts and the legend.
 
 **Depends on:** E1, E2.
 
 **Claude Code prompt:**
-> Build the read-only standings UI in `index.html`, `app.js`, `styles.css`. Load Supabase config from `config.js` (gitignored). On load, fetch `v_standings` with the anon key, pass the rows through `ranking.js` (`computeStandings`), and render a table: rank, name, GP, losses, games not lost, loss rate %. Add a sort toggle between "Most games not lost" and "Lowest loss rate"; default to lowest loss rate. Below the ranked table, show an "not enough games yet" group for provisional and gp=0 players with their raw numbers and no rank. Style players under 25% loss rate as "beating luck" and include a one-line legend: "A win is any game you did not lose. 25% is the loss rate of pure chance; lower is better." Show a clear error banner if the fetch fails, and a "Reload" button. Mobile-first layout; readable at arm's length at a card table.
+> Build the read-only standings UI in `index.html`, `app.js`, `styles.css`. Load Supabase config from `config.js`. Add a leaderboard switcher (a dropdown or tabs) listing all leaderboards; remember the last selected one in `localStorage`. On load and on switch, fetch that leaderboard's `v_standings` rows and its games with the anon key, pass the standings rows through `ranking.js` `computeStandings`, and render a table: rank, name (mark archived players), GP, losses, games not lost, loss rate %. Add a sort toggle between "Most games not lost" and "Lowest loss rate", default lowest loss rate. Below the ranked table, show a "not enough games yet" group for provisional and gp=0 players, no rank. Style sub-25% loss-rate players as "beating luck" with a one-line legend: "A win is any game you did not lose. 25% is the loss rate of pure chance; lower is better." Show an error banner with a Reload button if a fetch fails. Mobile-first, readable at a card table. If there are no leaderboards yet, show an empty state telling the admin to unlock and create one.
 
 **Acceptance criteria:**
-- Standings match `ranking.js` output exactly (no separate math in the UI).
-- Toggle switches order; default is lowest loss rate.
-- Provisional players sit below, unranked. Legend and luck line are visible and explained.
-- A failed fetch shows a banner, not a blank page.
+- Switcher lists leaderboards; switching recomputes the whole view; last choice is remembered.
+- Standings match `ranking.js` output; archived players show marked.
+- Toggle switches order; default lowest loss rate; provisional group sits below; legend and luck line visible.
+- Fetch error shows a banner. No-leaderboards state is handled.
 
-**Tests:** render with a seeded set of games and confirm the order matches the E2 vectors; simulate a fetch error and confirm the banner shows.
-
-**Rollback:** redeploy the previous static build.
+**Rollback:** redeploy the previous build.
 
 ---
 
-## Epic 5 — Frontend: admin log flow
+## Epic 5 — Frontend admin: leaderboard and player management, dated log flow
 
-**Goal:** the 3-tap logging the whole product is judged on, plus undo, edit, delete, and season reset, all gated by the passcode.
+**Goal:** the admin can manage leaderboards and players in the UI and log a dated game by picking 4 of the active players, all passcode-gated.
 
 **Depends on:** E3, E4.
 
 **Claude Code prompt:**
-> Add an admin mode to the frontend. An "Unlock" control asks for the passcode and keeps it in memory for the session (sessionStorage, not localStorage; never write it to the database). While unlocked, show admin controls; while locked, the page is read-only.
-> - Log a game: the four seeded players are pre-selected; the admin taps the one loser and taps Save. Saving calls the `admin` Edge Function `log_game` with the passcode. Target: 3 taps, under 10 seconds. After save, show a "last game" card with an Undo button that calls `undo_last`.
-> - Edit: from a game log list, change the loser (calls `edit_loser`) or delete a game (calls `delete_game`, with a confirm).
-> - Season: a "Start new season" button (confirm first) calls `start_season`.
-> - After any successful write, re-fetch standings so the table updates. Block Save if no loser is selected. Show the server's error message if a write is rejected, and keep the last valid state.
+> Add admin mode. An "Unlock" control asks for the passcode and keeps it in `sessionStorage` (never in the database, never in `localStorage`). Locked = read-only; unlocked = admin controls.
+> Leaderboards: create (name), rename, and delete (confirm first, with an "export first?" reminder) via the `admin` Edge Function. After a change, refresh the switcher.
+> Players (for the selected leaderboard): add a player (name), delete a player (calls `delete_player`; the server archives if they have games, hard-deletes if not; reflect the result), and restore an archived player. Show active and archived players separately.
+> Log a game: a date field defaulting to today, using the device's local date, with future dates disabled (set the input's max to today). Then choose the 4 players who played: if the leaderboard has exactly 4 active players, pre-select them; if more than 4, the admin selects exactly 4; if fewer than 4 active players, disable logging with a message to add players. Then tap the 1 loser and Save (calls `log_game` with `leaderboard_id`, the chosen local `game_date`, the 4 player ids, and the loser). Target 3 taps in the common 4-active-player case. After save, show a "last game" card with Undo (`undo_last`). Also allow editing a past game's loser (`edit_loser`) and deleting a game (`delete_game`, confirm).
+> After any successful write, re-fetch standings and games so the table and (later) the spotlights update. Block Save if the date is empty/future, if fewer or more than 4 players are chosen, or if no loser is marked. Show the server's error message on rejection and keep the last valid state.
 
 **Acceptance criteria:**
-- Locked = read-only; unlocked = full controls. Passcode never persisted to storage that outlives the session, never sent to the database.
-- Logging a game is 3 taps and updates the standings on success.
-- Undo, edit, delete, and season reset all work and refresh the table.
-- A rejected write shows the message and changes nothing on screen.
+- Locked = read-only; unlocked = full controls; passcode never persisted beyond the session or sent to the DB.
+- Create/rename/delete leaderboard and add/delete/restore player all work and refresh the UI; delete of a player with games archives them.
+- Date defaults to today and future dates are not selectable.
+- With 4 active players, logging is 3 taps; with more than 4, the admin must pick exactly 4; with fewer than 4, logging is disabled.
+- Undo, edit-loser, and delete-game work and refresh the view; a rejected write shows the message and changes nothing.
 
-**Tests:** log a game and confirm the row and standings update; undo and confirm reversal; attempt Save with no loser and confirm it is blocked; enter a wrong passcode and confirm no write.
-
-**Rollback:** redeploy the previous static build; data in Supabase is untouched.
+**Rollback:** redeploy the previous build; Supabase data untouched.
 
 ---
 
-## Epic 6 — Loser of the night, export, backup
+## Epic 6 — Loser spotlight (all-time + daily) and export
 
-**Goal:** the one delight hook the council kept, plus the export that is the offline backup.
+**Goal:** the two big loser cards above the table, and the export that is the offline backup.
 
-**Depends on:** E4, E5.
+**Depends on:** E2, E4, E5.
+
+**Spec (PRD 14.4):** two cards above the standings, one name each, rendered clearly larger than the table rows; ties show all names; empty states handled.
 
 **Claude Code prompt:**
-> Add two features. (1) "Loser of the night": from today's games (same calendar day, or a session the admin starts), compute and show who lost the most, e.g. "Tonight's biggest loser: Bima (3)". Pure client-side from the games already fetched; reuse or extend `ranking.js` with a tested helper. (2) Export: an admin button that downloads the full game log and current standings as a JSON file (and CSV if easy), containing every game's timestamp, four players, and loser, so the standings can be rebuilt from it. Write a unit test for the "loser of the night" helper with a hand-made set of today's games.
+> Add two things.
+> (1) Loser spotlight: above the standings table, render two large cards for the selected leaderboard, "All-time biggest loser" and "Today's biggest loser". Use `ranking.js`: `biggestLoserAllTime` for all-time, and `biggestLoserForDate(games, players, todayLocalDateStr)` for today (today = the device's local date, matching how games were dated). Show the name(s) in type clearly larger than the standings rows (a clear size jump, e.g. a large display size vs the table's body size). Ties show every tied name. If today has no games, the today card shows "No games logged today". If the leaderboard has no games at all, both cards show "No data yet".
+> (2) Export: an admin button that downloads the selected leaderboard's full game log and current standings as JSON (and CSV if easy), including each game's date, four players, and loser, so the standings can be rebuilt from it.
+> The spotlight helpers are already unit-tested in E2; add a small render test or manual check that ties and empty states display correctly.
 
 **Acceptance criteria:**
-- "Loser of the night" is correct for a known set of today's games and hidden when there are none today.
-- Export produces a complete file; a quick manual check confirms the standings could be rebuilt from it.
+- All-time card shows the max-losses name(s); today card shows today's max-losses name(s); both handle ties and empty states.
+- Spotlight names are visibly larger than the table rows.
+- Export produces a complete file for the selected leaderboard; a quick manual check confirms standings could be rebuilt from it.
 
-**Tests:** unit test the loser-of-the-night helper; manually open an export file and confirm every logged game is present.
-
-**Rollback:** redeploy the previous build. Export is read-only.
+**Rollback:** redeploy the previous build.
 
 ---
 
 ## Epic 7 — Verification, security, and ship
 
-**Goal:** prove the suite is strong, close the security surface, deploy, and confirm cross-device persistence for real.
+**Goal:** prove the suite is strong, close the security surface, deploy, and confirm cross-device persistence.
 
 **Depends on:** E1–E6.
 
 **Claude Code prompt:**
 > Do a verification and security pass before deploy.
-> - Run all tests. Report any function written without a matching test (verification debt), especially in the Edge Function.
-> - Confirm no tautological tests: the ranking tests must fail if the tiebreak order is changed. Deliberately break a tiebreak and confirm a test goes red, then revert.
-> - Security: confirm the anon key can only read (add an automated test that an anon-key insert into `games` is rejected). Confirm neither `ADMIN_PASSCODE` nor the service role key appears anywhere in the frontend bundle or the repo. Confirm CORS on the `admin` function is limited to the site origin. Add a simple rate limit or short lockout on repeated bad passcodes.
-> - Deploy the frontend to Netlify or Vercel and point it at the prod Supabase project with a fresh Season 1.
-> - Give me a short runbook: how to rotate the passcode, how to export a backup, how to roll back the frontend.
+> - Run all tests. Report any function written without a matching test, especially in the Edge Function.
+> - No tautological tests: the ranking tests must fail if a tiebreak order is changed; the spotlight tests must fail if "most losses" is swapped for "fewest". Break each deliberately, confirm a red test, then revert.
+> - Security: add an automated test that an anon-key insert into `games` is rejected; that a `log_game` with a future date is rejected; that neither `ADMIN_PASSCODE` nor the service role key appears in the frontend bundle or repo; that CORS on `admin` is limited to the site origin. Add a rate limit or short lockout on repeated bad passcodes.
+> - Deploy the frontend to Netlify or Vercel, pointed at the prod Supabase project, and create the first prod leaderboard.
+> - Give me a short runbook: rotate the passcode, export a leaderboard backup, roll back the frontend, and delete/rename a leaderboard.
 > Then produce the reviewer's session summary (feature, checkpoints passed, verification debt, security surface, rollback, observability).
 
 **Acceptance criteria (Checkpoint 5 — Verification + Security):**
 ```
-[ ] No tautological tests (breaking a tiebreak turns a test red)
-[ ] Error paths tested, not just happy paths (bad passcode, invalid payload, fetch error)
-[ ] Untrusted input identified and validated (Edge Function re-checks the invariant)
+[ ] No tautological tests (breaking a tiebreak or the loser rule turns a test red)
+[ ] Error paths tested (bad passcode, future date, cross-leaderboard player, invalid payload, fetch error)
+[ ] Untrusted input validated server-side (invariant, future date, same-leaderboard players)
 [ ] Anon key proven read-only by an automated test
 [ ] No secrets in the frontend or repo; passcode and service key only in function env
 [ ] Bad-passcode rate limit / lockout in place
 [ ] Failures observable (Edge Function logs each write)
-[ ] Rollback documented (redeploy build; reversible migrations; undo/archive/export)
+[ ] Rollback documented (redeploy build; reversible migrations; undo/export; player archive; leaderboard confirm)
 ```
 
-**The real ship test:** log a game on one phone; open the URL on a second device; refresh; confirm the game appears. This is the whole reason for the shared store.
+**The real ship test:** log a game on one phone; open the URL on a second device; switch to the same leaderboard; refresh; confirm the game and the updated spotlight appear.
 
 **Rollback:** keep the previous static deploy one version back; the prod database is unaffected by a frontend rollback.
 
 ---
 
-## Test vectors (shared, from PRD Appendix A)
+## Test vectors (shared, from PRD Appendix A + 14.4)
 
-Reuse these across E2, E4, and E7.
+Reuse across E2, E4, E6, E7. One leaderboard, these games:
 
 | Player | GP | Losses | Games not lost | Loss rate |
 |---|---|---|---|---|
@@ -261,12 +263,13 @@ Reuse these across E2, E4, and E7.
 | Dewi | 10 | 2 | 8 | 20% |
 | Eka | 2 | 0 | 2 | provisional (gp<5) |
 
-- Most games not lost: Ade, Dewi, Citra, Bima, then Eka (2, ranks last).
-- Lowest loss rate: Ade, Dewi, Citra, Bima ranked; Eka unranked (provisional).
-- Losses sum to 10 across the first four, one loser per game.
+- Most games not lost: Ade, Dewi, Citra, Bima, then Eka (2).
+- Lowest loss rate: Ade, Dewi, Citra, Bima ranked; Eka unranked.
+- All-time biggest loser: Bima (4 losses). If Bima and Citra both had 4, the card shows both.
+- Today's biggest loser: compute only from games whose `game_date` is today; if none are dated today, the card shows "No games logged today".
 
 ---
 
 ## What Claude Code should not decide for you
 
-Per the reviewer, keep these three as human calls: approving this plan before the build, approving the final diff before deploy, and any change to a file that governs AI behavior (a CLAUDE.md or settings file). Read the diffs; do not let momentum replace judgment.
+Per the reviewer, keep these human calls: approving this plan before the build, approving the final diff before deploy, deleting a leaderboard (irreversible cascade), and any change to a file that governs AI behavior (a CLAUDE.md or settings file). Read the diffs; do not let momentum replace judgment.

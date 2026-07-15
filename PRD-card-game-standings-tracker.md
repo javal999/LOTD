@@ -1,11 +1,13 @@
 # PRD: Card game standings tracker
 
 **Owner:** Product (acting senior PM)
-**Status:** Draft v2 (council-reviewed)
+**Status:** Draft v3 (council-reviewed + feature additions)
 **Date:** 2026-07-14
 **Deliverable type:** Requirements document (Markdown)
 
 > v2 changes from v1: locked to strictly 4 players; switched to a hosted web app with shared data that stays consistent across devices; single admin writes, everyone else reads; promoted data persistence and export to P0; relabeled "wins"; fixed the sort tiebreak; defined "season"; added a data-integrity and social-risk section. These changes come from a 5-advisor council review (see the council report and transcript).
+>
+> v3 changes from v2 (see section 14 at the end): added multiple leaderboards, which replace the "season" concept; promoted in-UI player add/delete (with archive-on-delete) to P0; added dated game logging that defaults to today and blocks future dates; and added an all-time and daily "biggest loser" spotlight above the table, absorbing v2's "loser of the night". Sections 14.1 and 14.2 change the data model, so TRD-2026-001 and the build plan need matching updates (noted at the end of section 14).
 
 ---
 
@@ -330,3 +332,146 @@ Four players, 10 games. L = losses. Losses sum to 10, one per game.
 Everyone played 10, so both sorts give the same order: Ade, Dewi, Citra, Bima. This is the case from section 2 where the two rankings collapse into one.
 
 Now add Eka, who played 2 games and lost 0. In "most games not lost" mode Eka has 2 and ranks last, which looks odd until you remember he only played twice. In "lowest loss rate" mode, Eka is "not enough games yet" (under 5 games) and sits below the ranked four rather than topping them on a 0% rate. The legend and the "not enough games yet" grouping are what stop a stranger from reading this as a bug.
+
+---
+
+## 14. v3 additions (2026-07-14): leaderboards, player management, dated logging, loser spotlight
+
+Four features from Levi's review, detailed here. Two of them (14.1 multiple leaderboards, 14.2 in-UI player management) change the data model, so they also change TRD-2026-001 and the build plan. See "Impact on the TRD and build plan" at the end. Where a v3 item conflicts with v2, v3 wins and the superseded item is named.
+
+### 14.1 Multiple leaderboards (replaces seasons)
+
+Problem: the group plays more than one game, or wants a clean slate, and "start a new season" is a weak way to say that. A leaderboard is the top-level tracker, and there can be several.
+
+Decision from review: each leaderboard has its own players, games, and standings. Creating a new leaderboard replaces the season reset. The v2 "season" concept (7.8) is removed.
+
+User stories:
+- As the admin, I want to create a named leaderboard, so each game or group has its own standings.
+- As the admin, I want to switch the active leaderboard, so I log and view the right one.
+- As a viewer, I want to pick which leaderboard I am looking at, so I see the standings I care about.
+- As the admin, I want to rename or delete a leaderboard, so I can fix a typo or clear one I no longer use.
+
+Requirements (P0):
+- Create a leaderboard with a name, unique across leaderboards.
+- Every player, game, standing, and loser spotlight is scoped to one leaderboard.
+- Switch the selected leaderboard; the whole view recomputes for it.
+- Rename a leaderboard.
+- Delete a leaderboard behind a confirm, with a reminder to export first. Deleting removes that leaderboard's players and games.
+- This replaces v2 7.8: there is no season. To reset, create a new leaderboard.
+
+Acceptance criteria:
+- Given the admin creates "Poker" and logs games there, when they view "Remi", then those games do not appear under "Remi".
+- Given two leaderboards exist, when anyone switches, then the table, both loser spotlights, and ranks recompute for the selected leaderboard.
+- Given the admin deletes a leaderboard and confirms, then it and its data are gone and the view falls back to another leaderboard.
+
+Edge cases:
+- First run, no leaderboard yet: the app prompts the admin to create the first one before anything else.
+- Default on open: the last leaderboard viewed on this device, else the first created.
+- Same player name in two leaderboards: allowed, they are separate records (players belong to a leaderboard).
+- Deleting the only leaderboard: allowed, then the app returns to the create-first-leaderboard state.
+
+### 14.2 Add and delete players in the UI (promoted from P2 to P0)
+
+Problem: v2 fixed the roster at 4 seeded names. Groups change, and the admin should manage players without touching the database.
+
+User stories:
+- As the admin, I want to add a player to the current leaderboard, so a new friend is tracked.
+- As the admin, I want to remove a player, so someone who left stops cluttering the roster.
+- As the admin, I want past results kept when I remove someone who already played, so history stays honest.
+
+Requirements (P0):
+- Add a player with a name, unique within the leaderboard.
+- Delete a player with zero games: removed outright.
+- Delete a player who has games: archived, not hard-deleted. Archived players stay in the standings with an "archived" mark (their games happened) and are not offered when logging a new game.
+- Logging needs at least 4 active (non-archived) players. If the leaderboard has exactly 4 active players, they are pre-selected when logging; if more than 4, the admin picks the 4 who played, then the loser. Every game is still exactly 4 players and 1 loser.
+- Restore an archived player (P1).
+
+Acceptance criteria:
+- Given the admin adds "Eka", then Eka appears in the roster and the log picker.
+- Given the admin deletes a player with no games, then the player is gone.
+- Given the admin deletes a player who has games, then the player is archived, still shown in standings marked archived, and not selectable for a new game.
+- Given a leaderboard has 5 active players, when the admin logs a game, then they must select exactly 4 before marking the loser.
+- Given fewer than 4 active players, then logging is disabled with a message to add players.
+
+Edge cases:
+- Duplicate name within a leaderboard: blocked at add time.
+- Archiving drops active players below 4: logging is disabled until a player is added or restored.
+- Deleting a player mid-standings: standings recompute; archived players keep their rows.
+
+### 14.3 Dated game logging: default today, no future dates
+
+Problem: games get logged late, and the day a game counts toward matters for the daily loser. v2 used only the automatic timestamp.
+
+User stories:
+- As the admin, I want the game date to default to today, so the common case is one fewer decision.
+- As the admin, I want to backdate a game I forgot to log, so history is accurate.
+- As the admin, I want future dates blocked, so a mis-tap cannot create a game that has not happened.
+
+Requirements (P0):
+- The log form has a date field defaulting to today, the admin's local date.
+- The admin can pick any date up to and including today.
+- Future dates are not selectable.
+- The chosen date decides which day the game counts toward for the daily loser spotlight and any day grouping.
+
+Acceptance criteria:
+- Given the admin opens the log form, then the date is today by default.
+- Given the admin tries to pick tomorrow, then the date control does not allow it.
+- Given the admin logs a game dated yesterday, then it counts toward yesterday, not today, in the daily loser spotlight.
+
+Edge cases:
+- The day boundary is the admin's local midnight. "Today" means the admin's local date.
+- Backdating recomputes historical standings and the affected day's loser.
+- The date resets to today each time the form opens; it does not stick to the last used date.
+
+### 14.4 Loser spotlight: all-time and daily biggest loser
+
+Problem: the emotional point of a 1-loser game is the loser, and v2 buried this in a small "loser of the night" line. Make it the headline.
+
+Decision from review: two spotlight cards sit above the standings table, one name each, rendered much larger than the table rows. This supersedes and absorbs v2 7.9 (loser of the night).
+
+- All-time biggest loser: the player with the most losses in this leaderboard (absolute loss count, the "goat").
+- Today's biggest loser: the player with the most losses among games dated today.
+
+User stories:
+- As a viewer, I want to see the all-time biggest loser in big letters, so the running joke is front and center.
+- As a viewer, I want to see today's biggest loser, so tonight has a clear result.
+
+Requirements (P0):
+- Show two cards above the leaderboard: "All-time biggest loser" and "Today's biggest loser".
+- Each shows a single name by default, rendered visibly larger than the standings rows.
+- Ties show all tied names.
+- The main standings table stays sortable by games not lost and by loss rate (the skill view). The spotlight is the "who loses most" view; the table is the "who is good" view.
+
+Acceptance criteria:
+- Given Bima has the most losses all-time in this leaderboard, then the all-time card shows "Bima" in large type.
+- Given two players tie for most losses today, then today's card shows both names.
+- Given no games are dated today, then today's card shows a short empty message, for example "No games logged today".
+- Given the leaderboard has no games at all, then both cards show a "no data yet" state.
+- The spotlight names are clearly larger than the table's name column, a visible size difference, not a subtle one.
+
+Edge cases:
+- Ties on the all-time card: list every tied name.
+- A backdated game changes the correct day's card, not today's.
+- An archived player can still be the all-time biggest loser if their losses are the highest; their history counts. Mark them archived on the card.
+
+### 14.5 Changes to earlier sections
+
+- v2 7.8 (season and reset): removed. Leaderboards (14.1) replace it. Any earlier mention of "season" now means "leaderboard".
+- v2 7.9 (loser of the night): absorbed into 14.4 as the prominent daily spotlight.
+- v2 personas: the admin now manages players and leaderboards in the UI. v2 P2 "player management" is promoted to P0.
+- v2 7.3 log flow: when a leaderboard has more than 4 active players, the admin selects the 4 who played before marking the loser. Still exactly 4 players and 1 loser per game.
+
+### 14.6 Success metrics additions
+
+- Leaderboards in use: at least 1 created and logged against (proves 14.1 fits the group).
+- Spotlight is the draw: the standings page is opened when no game is being logged. Proxy target: page views per week exceed games logged per week, which would show the loser spotlight, not just logging, brings people back.
+
+### 14.7 Open questions (v3)
+
+- [OPEN — Can one game belong to more than one leaderboard, or always exactly one? Proposal: exactly one — Levi — before build]
+- [OPEN — Should archived players be hidden from standings entirely, or shown with an "archived" mark? Spec assumes shown with a mark — Levi — before build]
+- RESOLVED (2026-07-14, Levi): all-time biggest loser is by total (accumulative) losses. Ties show every tied name, joined in the card (e.g. "Bima & Citra"); this is a display detail, no extra logic.
+
+### 14.8 Impact on the TRD and build plan
+
+These change TRD-2026-001 and the build plan. In short: add a `leaderboards` table as the top container; give `players` a `leaderboard_id` and an `archived` flag with unique(name, leaderboard_id); give `games` a `leaderboard_id` and a `game_date` the admin sets, rejected if in the future; drop the `seasons` table and the single-active-season rule; scope `v_standings` and both loser spotlights by `leaderboard_id`; add Edge Function actions for create, rename, and delete leaderboard, and add, delete, and restore player; and generalize the log flow to pick 4 of N active players. I can update both docs to match on request.
