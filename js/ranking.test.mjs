@@ -25,26 +25,33 @@ test('most_not_lost: equal GP → Ade, Dewi, Citra, Bima', () => {
   assert.equal(unranked.length, 0);
 });
 
-test('lowest_loss_rate: equal GP → Ade, Dewi, Citra, Bima', () => {
-  const { ranked, unranked } = computeStandings(APPENDIX_A, MODES.LOWEST_LOSS_RATE);
-  assert.deepEqual(names(ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
-  assert.deepEqual(ranked.map((p) => p.loss_rate), [0.1, 0.2, 0.3, 0.4]);
+test('highest_loss_rate: equal GP → Bima, Citra, Dewi, Ade (worst first)', () => {
+  const { ranked, unranked } = computeStandings(APPENDIX_A, MODES.HIGHEST_LOSS_RATE);
+  assert.deepEqual(names(ranked), ['Bima', 'Citra', 'Dewi', 'Ade']);
+  assert.deepEqual(ranked.map((p) => p.loss_rate), [0.4, 0.3, 0.2, 0.1]);
   assert.equal(unranked.length, 0);
 });
 
+// The reason the sort is descending at all: the table's #1 has to be the same person the
+// spotlight crowns, or the page contradicts itself.
+test('rank 1 in highest_loss_rate is the biggest loser (agrees with the spotlight)', () => {
+  const { ranked } = computeStandings(APPENDIX_A, MODES.HIGHEST_LOSS_RATE);
+  assert.deepEqual([ranked[0].name], biggestLoserAllTime(APPENDIX_A)); // both → Bima
+});
+
 test('ranks are the contiguous sequence 1..n', () => {
-  const { ranked } = computeStandings(APPENDIX_A, MODES.LOWEST_LOSS_RATE);
+  const { ranked } = computeStandings(APPENDIX_A, MODES.HIGHEST_LOSS_RATE);
   assert.deepEqual(ranked.map((p) => p.rank), [1, 2, 3, 4]);
 });
 
-test('Eka (gp 2): ranked last in most_not_lost, unranked (provisional) in lowest_loss_rate', () => {
+test('Eka (gp 2): ranked last in most_not_lost, unranked (provisional) in highest_loss_rate', () => {
   const roster = [...APPENDIX_A, EKA];
   const gnl = computeStandings(roster, MODES.MOST_NOT_LOST);
   assert.equal(names(gnl.ranked).at(-1), 'Eka');   // games_not_lost = 2 → last, but ranked
   assert.equal(gnl.unranked.length, 0);
 
-  const lr = computeStandings(roster, MODES.LOWEST_LOSS_RATE);
-  assert.deepEqual(names(lr.ranked), ['Ade', 'Dewi', 'Citra', 'Bima']);
+  const lr = computeStandings(roster, MODES.HIGHEST_LOSS_RATE);
+  assert.deepEqual(names(lr.ranked), ['Bima', 'Citra', 'Dewi', 'Ade']);
   assert.deepEqual(names(lr.unranked), ['Eka']);
   assert.equal(lr.unranked[0].provisional, true);
 });
@@ -64,7 +71,7 @@ test('provisional flag is gp < 5', () => {
     { name: 'Four', gp: 4, losses: 1, archived: false },
     { name: 'Five', gp: 5, losses: 1, archived: false },
   ];
-  const { ranked, unranked } = computeStandings(roster, MODES.LOWEST_LOSS_RATE);
+  const { ranked, unranked } = computeStandings(roster, MODES.HIGHEST_LOSS_RATE);
   assert.deepEqual(names(ranked), ['Five']);
   assert.deepEqual(names(unranked), ['Four']);
 });
@@ -77,12 +84,12 @@ test('most_not_lost tie on games_not_lost → lower loss rate wins', () => {
   assert.deepEqual(names(computeStandings(roster, MODES.MOST_NOT_LOST).ranked), ['P', 'Q']);
 });
 
-test('lowest_loss_rate tie on loss rate → bigger sample wins', () => {
+test('highest_loss_rate tie on loss rate → bigger sample wins', () => {
   const roster = [
     { name: 'R', gp: 10, losses: 2, archived: false }, // lr .20
     { name: 'S', gp: 20, losses: 4, archived: false }, // lr .20, more gp
   ];
-  assert.deepEqual(names(computeStandings(roster, MODES.LOWEST_LOSS_RATE).ranked), ['S', 'R']);
+  assert.deepEqual(names(computeStandings(roster, MODES.HIGHEST_LOSS_RATE).ranked), ['S', 'R']);
 });
 
 test('final tiebreak is name A→Z (both modes)', () => {
@@ -91,7 +98,7 @@ test('final tiebreak is name A→Z (both modes)', () => {
     { name: 'Abe', gp: 5, losses: 1, archived: false },
   ];
   assert.deepEqual(names(computeStandings(roster, MODES.MOST_NOT_LOST).ranked), ['Abe', 'Zed']);
-  assert.deepEqual(names(computeStandings(roster, MODES.LOWEST_LOSS_RATE).ranked), ['Abe', 'Zed']);
+  assert.deepEqual(names(computeStandings(roster, MODES.HIGHEST_LOSS_RATE).ranked), ['Abe', 'Zed']);
 });
 
 test('archived players are still ranked, with the flag carried through', () => {
@@ -99,16 +106,16 @@ test('archived players are still ranked, with the flag carried through', () => {
     { name: 'Gone', gp: 10, losses: 1, archived: true },
     { name: 'Here', gp: 10, losses: 5, archived: false },
   ];
-  const { ranked } = computeStandings(roster, MODES.LOWEST_LOSS_RATE);
-  assert.deepEqual(names(ranked), ['Gone', 'Here']); // their games happened; still counted
-  assert.equal(ranked[0].archived, true);
-  assert.equal(ranked[1].archived, false);
+  const { ranked } = computeStandings(roster, MODES.HIGHEST_LOSS_RATE);
+  assert.deepEqual(names(ranked), ['Here', 'Gone']); // their games happened; still counted
+  assert.equal(ranked[0].archived, false);
+  assert.equal(ranked[1].archived, true);
 });
 
 test('computeStandings does not mutate its input', () => {
   const roster = [{ name: 'X', gp: 5, losses: 1, archived: false }];
   const snapshot = JSON.stringify(roster);
-  computeStandings(roster, MODES.LOWEST_LOSS_RATE);
+  computeStandings(roster, MODES.HIGHEST_LOSS_RATE);
   assert.equal(JSON.stringify(roster), snapshot);
 });
 

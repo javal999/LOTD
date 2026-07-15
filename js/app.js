@@ -10,7 +10,7 @@ const LAST_BOARD = 'lotd.lastBoard';
 let boards = [];      // [{id, name}]
 let boardId = null;
 let data = null;      // { standings, games, players }
-let mode = MODES.LOWEST_LOSS_RATE;   // PRD: default to the skill view
+let mode = MODES.HIGHEST_LOSS_RATE;  // default to the skill view — worst first, like the spotlight
 let error = null;
 
 // ---- helpers ----
@@ -370,7 +370,13 @@ function rowsHTML(list, ranked) {
     // No per-row "N more to rank": the divider states the threshold once, which keeps the
     // name column wide enough that names don't wrap on a phone.
     const need = '';
-    const cls = [ranked && p.rank === 1 ? 'lead' : '', ranked ? '' : 'quiet-row'].filter(Boolean).join(' ');
+    // #1 means opposite things per mode — biggest loser (clay) vs most clean games (gold).
+    // Colouring it by meaning stops the top row reading as "champion" on a loser board.
+    const top = ranked && p.rank === 1;
+    const cls = [
+      top ? (mode === MODES.HIGHEST_LOSS_RATE ? 'lead-loser' : 'lead') : '',
+      ranked ? '' : 'quiet-row',
+    ].filter(Boolean).join(' ');
     return `<tr${cls ? ` class="${cls}"` : ''}>
       <td class="rank">${ranked ? p.rank : '<span class="muted">–</span>'}</td>
       <td class="who">${esc(p.name)}${archived}${need}</td>
@@ -381,17 +387,18 @@ function rowsHTML(list, ranked) {
 }
 
 function tableHTML(ranked, unranked) {
-  const sortedBy = (m) => (mode === m ? 'ascending' : 'none');
+  // Both modes now put the worst player on top, so the sorted column is always descending.
+  const sortedBy = (m) => (mode === m ? 'descending' : 'none');
   return `
     <div class="sort" role="group" aria-label="Ranking mode">
-      <button data-mode="${MODES.LOWEST_LOSS_RATE}" aria-pressed="${mode === MODES.LOWEST_LOSS_RATE}">Lowest loss rate</button>
+      <button data-mode="${MODES.HIGHEST_LOSS_RATE}" aria-pressed="${mode === MODES.HIGHEST_LOSS_RATE}">Highest loss rate</button>
       <button data-mode="${MODES.MOST_NOT_LOST}" aria-pressed="${mode === MODES.MOST_NOT_LOST}">Most games not lost</button>
     </div>
     <table class="standings">
       <thead><tr>
         <th class="rank">#</th><th>Player</th><th class="num">GP</th><th class="num">L</th>
         <th class="num" aria-sort="${sortedBy(MODES.MOST_NOT_LOST)}">Not lost</th>
-        <th class="num" aria-sort="${sortedBy(MODES.LOWEST_LOSS_RATE)}">Loss rate</th>
+        <th class="num" aria-sort="${sortedBy(MODES.HIGHEST_LOSS_RATE)}">Loss rate</th>
       </tr></thead>
       <tbody>
         ${rowsHTML(ranked, true)}

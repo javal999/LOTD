@@ -90,7 +90,7 @@ E2 (pure logic) and E3 (write path) can be built in either order after E1. Every
 **Depends on:** E1 (for input row shape).
 
 **Spec (PRD 2, 7.5, 14.4):**
-- `computeStandings(rows, mode)`: `rows` = `[{name, gp, losses, archived}]`; `mode` = `"most_not_lost" | "lowest_loss_rate"`. Output `{ ranked:[...rank 1..n], unranked:[...] }`.
+- `computeStandings(rows, mode)`: `rows` = `[{name, gp, losses, archived}]`; `mode` = `"most_not_lost" | "highest_loss_rate"`. Output `{ ranked:[...rank 1..n], unranked:[...] }`.
 - `biggestLoserAllTime(rows)`: the name(s) with the most `losses` (absolute). Returns an array (ties → multiple).
 - `biggestLoserForDate(games, players, dateStr)`: among games whose `game_date === dateStr`, the player(s) with the most losses that day. Returns an array.
 
@@ -98,15 +98,15 @@ E2 (pure logic) and E3 (write path) can be built in either order after E1. Every
 
 Input (all played 10): `Ade l1, Bima l4, Citra l3, Dewi l2`.
 - `most_not_lost` → Ade(9), Dewi(8), Citra(7), Bima(6).
-- `lowest_loss_rate` → Ade(10%), Dewi(20%), Citra(30%), Bima(40%).
-- Add `Eka gp2 l0`: `most_not_lost` → Eka last (2); `lowest_loss_rate` → Eka unranked (provisional, gp<5).
+- `highest_loss_rate` → Bima(40%), Citra(30%), Dewi(20%), Ade(10%). (Descending since 2026-07-15: rank 1 is the biggest loser, matching the spotlight.)
+- Add `Eka gp2 l0`: `most_not_lost` → Eka last (2); `highest_loss_rate` → Eka unranked (provisional, gp<5).
 - `biggestLoserAllTime` → `["Bima"]` (4 losses, the most).
 - Two players tied at the top of losses → both names returned.
 
 **Claude Code prompt:**
 > First write a test file for a pure module `ranking.js`, then implement it to pass. Do not implement before the tests exist and fail.
 > Exports:
-> - `computeStandings(rows, mode)`: `rows` = `[{name, gp, losses, archived}]`. `games_not_lost = gp - losses`; `loss_rate = losses/gp` or `null` if `gp===0`; `provisional = gp < 5`. Mode `most_not_lost`: rank all by games_not_lost desc; tiebreak lower loss_rate, then more gp, then name A→Z. Mode `lowest_loss_rate`: rank only non-provisional by loss_rate asc; tiebreak more gp, then more games_not_lost, then name A→Z; provisional and gp=0 go to a separate `unranked` list. Archived players are still included (their games happened); just carry the `archived` flag through.
+> - `computeStandings(rows, mode)`: `rows` = `[{name, gp, losses, archived}]`. `games_not_lost = gp - losses`; `loss_rate = losses/gp` or `null` if `gp===0`; `provisional = gp < 5`. Mode `most_not_lost`: rank all by games_not_lost desc; tiebreak lower loss_rate, then more gp, then name A→Z. Mode `highest_loss_rate`: rank only non-provisional by loss_rate **desc**; tiebreak more gp, then **fewer** games_not_lost, then name A→Z; provisional and gp=0 go to a separate `unranked` list. Archived players are still included (their games happened); just carry the `archived` flag through.
 > - `biggestLoserAllTime(rows)`: return an array of the name(s) with the maximum `losses`. Empty array if no games.
 > - `biggestLoserForDate(games, players, dateStr)`: `games` = `[{game_date, loser}]` (player id), `players` = `[{id,name}]`. Among games with `game_date === dateStr`, return the name(s) with the most losses that day. Empty array if none.
 > Cover as tests: the equal-GP vectors (both modes), the Eka provisional case (both modes), a gp=0 player (unranked, null loss_rate, no divide-by-zero), each tiebreak level, `biggestLoserAllTime` single and tie, `biggestLoserForDate` for a day with games and a day with none. Show failing tests first, then green.
@@ -159,7 +159,7 @@ Input (all played 10): `Ade l1, Bima l4, Citra l3, Dewi l2`.
 **Depends on:** E1, E2.
 
 **Claude Code prompt:**
-> Build the read-only standings UI in `index.html`, `app.js`, `styles.css`. Load Supabase config from `config.js`. Add a leaderboard switcher (a dropdown or tabs) listing all leaderboards; remember the last selected one in `localStorage`. On load and on switch, fetch that leaderboard's `v_standings` rows and its games with the anon key, pass the standings rows through `ranking.js` `computeStandings`, and render a table: rank, name (mark archived players), GP, losses, games not lost, loss rate %. Add a sort toggle between "Most games not lost" and "Lowest loss rate", default lowest loss rate. Below the ranked table, show a "not enough games yet" group for provisional and gp=0 players, no rank. Style sub-25% loss-rate players as "beating luck" with a one-line legend: "A win is any game you did not lose. 25% is the loss rate of pure chance; lower is better." Show an error banner with a Reload button if a fetch fails. Mobile-first, readable at a card table. If there are no leaderboards yet, show an empty state telling the admin to unlock and create one.
+> Build the read-only standings UI in `index.html`, `app.js`, `styles.css`. Load Supabase config from `config.js`. Add a leaderboard switcher (a dropdown or tabs) listing all leaderboards; remember the last selected one in `localStorage`. On load and on switch, fetch that leaderboard's `v_standings` rows and its games with the anon key, pass the standings rows through `ranking.js` `computeStandings`, and render a table: rank, name (mark archived players), GP, losses, games not lost, loss rate %. Add a sort toggle between "Most games not lost" and "Highest loss rate", default highest loss rate. Below the ranked table, show a "not enough games yet" group for provisional and gp=0 players, no rank. Style sub-25% loss-rate players as "beating luck" with a one-line legend: "A win is any game you did not lose. 25% is the loss rate of pure chance; lower is better." Show an error banner with a Reload button if a fetch fails. Mobile-first, readable at a card table. If there are no leaderboards yet, show an empty state telling the admin to unlock and create one.
 
 **Acceptance criteria:**
 - Switcher lists leaderboards; switching recomputes the whole view; last choice is remembered.
@@ -264,7 +264,7 @@ Reuse across E2, E4, E6, E7. One leaderboard, these games:
 | Eka | 2 | 0 | 2 | provisional (gp<5) |
 
 - Most games not lost: Ade, Dewi, Citra, Bima, then Eka (2).
-- Lowest loss rate: Ade, Dewi, Citra, Bima ranked; Eka unranked.
+- Highest loss rate: Bima, Citra, Dewi, Ade ranked; Eka unranked.
 - All-time biggest loser: Bima (4 losses). If Bima and Citra both had 4, the card shows both.
 - Today's biggest loser: compute only from games whose `game_date` is today; if none are dated today, the card shows "No games logged today".
 

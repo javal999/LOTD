@@ -49,7 +49,7 @@ Per-player stats, all derived from the game log:
 **Two ranking modes** (the admin or any viewer can toggle):
 
 1. **Most games not lost** — sort by (GP − L) descending. Answers "who has the most clean games." Rewards showing up and not losing. A regular who plays 40 games outranks a strong player who played 10, by design.
-2. **Lowest loss rate** — sort by loss rate ascending, among players who meet a minimum games threshold (fixed at 5 for v1). Answers "who is hardest to beat per game." Normalizes for how often someone plays.
+2. **Highest loss rate** — sort by loss rate **descending**, among players who meet a minimum games threshold (fixed at 5 for v1). Answers "who loses most often per game." Normalizes for how often someone plays. Descending (changed 2026-07-15, was ascending) so rank 1 is the biggest loser — the same person the spotlight crowns. A board called Loser of the Day shouldn't put the best player on top.
 
 **Important honesty note for the group.** These two rankings produce the same order whenever everyone has played the same number of games. They only diverge when attendance differs. If this group always plays with the same 4 people every night, one ranking is enough and the toggle is mostly cosmetic. The toggle earns its place only if attendance varies. This is called out so the group can decide whether they actually need both (see Open Questions).
 
@@ -156,7 +156,7 @@ Grouped by persona, ordered by priority.
 - Given a stranger opens the page, then the legend makes clear why lower loss rate ranks higher and what 25% means.
 
 **7.5 Dual ranking with a fixed small-sample guard**
-- Toggle between "Most games not lost" (descending) and "Lowest loss rate" (ascending).
+- Toggle between "Most games not lost" (descending, rank 1 = most clean games, marked gold) and "Highest loss rate" (descending, rank 1 = biggest loser, marked clay). The two views deliberately disagree about what rank 1 means, so the rank colour states which one you're looking at.
 - In loss-rate mode, only players with at least 5 games are ranked; others sit in "not enough games yet" with their raw numbers shown but no rank.
 - Tiebreaks (applied consistently, no cross-contamination between the two axes):
   - Most-games-not-lost mode ties: break by lower loss rate, then more games played, then name A to Z.

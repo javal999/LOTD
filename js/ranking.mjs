@@ -7,9 +7,12 @@
 export const MIN_GAMES_FOR_RATE = 5;   // below this a player is "provisional" (PRD 7.5)
 export const LUCK_BASELINE = 0.25;     // 4 players, 1 loser → 25% by chance (PRD §2)
 
+// This is a *loser* board: rank 1 is the biggest loser, so the table agrees with the
+// spotlight above it. (PRD v3 specified lowest-first; Levi reversed it 2026-07-15 so the
+// top of the table matches the highlighted loser.)
 export const MODES = {
   MOST_NOT_LOST: 'most_not_lost',
-  LOWEST_LOSS_RATE: 'lowest_loss_rate',
+  HIGHEST_LOSS_RATE: 'highest_loss_rate',
 };
 
 // Derive the display stats a v_standings row implies.
@@ -36,10 +39,10 @@ function byMostNotLost(a, b) {
       || a.name.localeCompare(b.name);         // then A→Z
 }
 
-function byLowestLossRate(a, b) {
-  return a.loss_rate - b.loss_rate             // hardest to beat first
-      || b.gp - a.gp                            // then bigger sample
-      || b.games_not_lost - a.games_not_lost    // then more clean games
+function byHighestLossRate(a, b) {
+  return b.loss_rate - a.loss_rate             // biggest loser first
+      || b.gp - a.gp                            // then bigger sample (more proof of it)
+      || a.games_not_lost - b.games_not_lost    // then fewer clean games
       || a.name.localeCompare(b.name);         // then A→Z
 }
 
@@ -49,10 +52,10 @@ function byLowestLossRate(a, b) {
 // their games happened — and carry the flag through for the UI to mark.
 export function computeStandings(rows, mode) {
   const all = rows.map(decorate);
-  const isEligible = mode === MODES.LOWEST_LOSS_RATE
+  const isEligible = mode === MODES.HIGHEST_LOSS_RATE
     ? (p) => p.gp >= MIN_GAMES_FOR_RATE
     : (p) => p.gp >= 1;
-  const cmp = mode === MODES.LOWEST_LOSS_RATE ? byLowestLossRate : byMostNotLost;
+  const cmp = mode === MODES.HIGHEST_LOSS_RATE ? byHighestLossRate : byMostNotLost;
   const ranked = all.filter(isEligible).sort(cmp).map((p, i) => ({ ...p, rank: i + 1 }));
   const unranked = all.filter((p) => !isEligible(p));
   return { ranked, unranked };

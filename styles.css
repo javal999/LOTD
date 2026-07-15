@@ -116,7 +116,8 @@ button, select { font-family:inherit; cursor:pointer; }
 .standings tr:last-child td { border-bottom:0; }
 .standings th.rank, .standings td.rank { width:34px; padding-left:14px; text-align:left; color:var(--ink-2); font-weight:700; }
 .standings tr.lead td.rank { color:var(--gold); }
-.standings tr.lead td.who { font-weight:700; }
+.standings tr.lead-loser td.rank { color:var(--clay); }
+.standings tr.lead td.who, .standings tr.lead-loser td.who { font-weight:700; }
 .standings td.who { font-weight:600; }
 .standings th.num, .standings td.num { text-align:right; }
 .standings td.rate { padding-right:14px; font-weight:600; white-space:nowrap; }
