@@ -259,4 +259,86 @@ body.unlocked .wrap { padding-bottom:96px; }
 .toast strong { font-weight:700; }
 .toast-undo { border:0; background:transparent; color:var(--gold); font-weight:700; font-size:14px; padding:6px 10px; }
 
+/* ---- log button spacing ---- */
+/* Anyone can log now (no unlock), so reserve room for the fixed Log button whenever it
+   shows — not only when unlocked. */
+body.has-logbar .wrap { padding-bottom:96px; }
+
+/* ---- confess-log sheet: roomy, clear hierarchy ---- */
+.sheet-log { padding:26px 22px calc(24px + env(safe-area-inset-bottom)); }
+@media (min-width:520px) { .sheet-log { padding:32px 30px 28px; } }
+.pec-title { font-size:clamp(25px, 6.5vw, 31px); line-height:1.15; margin-bottom:16px; }
+.pec-input {
+  height:64px; font-size:23px; font-weight:600; text-align:center; letter-spacing:.01em; margin-bottom:0;
+}
+.pec-input::placeholder { font-weight:500; color:var(--ink-2); opacity:.55; letter-spacing:0; }
+.pec-sub { margin:12px 2px 0; }
+
+/* the confirmed loser, called out as a card */
+.loser-card {
+  display:flex; align-items:center; gap:13px; margin:22px 0 24px; padding:15px 17px;
+  border-radius:var(--radius-lg); background:var(--clay-tint);
+}
+.loser-card .lc-emoji { font-size:28px; line-height:1; flex:none; }
+.loser-card .lc-col { display:flex; flex-direction:column; min-width:0; }
+.loser-card .lc-name { font-family:var(--font-display); font-weight:600; font-size:23px; line-height:1.1; color:var(--clay); overflow-wrap:anywhere; }
+.loser-card .lc-text { font-size:13px; font-weight:600; color:var(--ink-2); margin-top:2px; }
+
+/* who-else-played picker */
+.pick-label { display:flex; align-items:center; gap:9px; font-size:15px; font-weight:600; color:var(--ink); margin:0 2px 13px; }
+.pick-count { font-size:12px; font-weight:700; color:var(--ink-2); background:var(--surface-2); padding:3px 10px; border-radius:var(--radius-pill); }
+.pick-count.done { color:var(--felt); background:var(--felt-tint); }
+.chips-lg { gap:10px; }
+.chips-lg .chip { height:46px; padding:0 18px; font-size:16px; }
+
+/* date, tucked away until needed */
+.date-toggle { display:inline-block; margin:22px 0 0; padding:8px 2px; background:transparent; border:0; color:var(--ink-2); font-size:14px; font-weight:600; }
+.date-toggle u { color:var(--felt); text-decoration:none; border-bottom:1.5px solid currentColor; }
+.date-wrap { margin-top:12px; }
+.date-wrap[hidden] { display:none; }
+.sheet-log .sheet-actions { margin-top:26px; }
+
+/* ---- pecundang stamp (post-log reveal) ---- */
+.pecundang {
+  position:fixed; inset:0; z-index:60; display:grid; place-items:center; align-content:center; gap:24px;
+  background:rgba(15,10,8,.62); cursor:pointer; padding:24px; animation:pecFade .2s ease both;
+}
+.stamp {
+  --stamp-ink:#c31d1d; transform:rotate(-13deg); text-align:center; color:var(--stamp-ink);
+  padding:.24em .58em .32em; border:.13em solid var(--stamp-ink); border-radius:14px;
+  background:rgba(255,255,255,.03);
+  box-shadow:inset 0 0 0 .3em rgba(195,29,29,.14), 0 8px 34px rgba(0,0,0,.45);
+  animation:pecSlam .55s cubic-bezier(.18,1.5,.4,1) both;
+}
+.stamp-name {
+  display:block; font-family:var(--font-display); font-weight:600; line-height:.9; white-space:nowrap;
+  font-size:clamp(2.6rem, 15vw, 5rem); letter-spacing:.01em; text-transform:uppercase;
+}
+.stamp-word {
+  display:block; margin-top:.12em; font-family:var(--font-ui); font-weight:800; opacity:.95;
+  font-size:clamp(1.1rem, 6.5vw, 2rem); letter-spacing:.3em; text-transform:uppercase;
+}
+.pec-roast {
+  color:#fff; opacity:.95; text-align:center; font-weight:600; max-width:20ch; line-height:1.35;
+  font-size:clamp(15px, 4.6vw, 19px); text-shadow:0 1px 8px rgba(0,0,0,.5);
+}
+.pec-undo {
+  border:0; background:rgba(255,255,255,.15); color:#fff; font-weight:700; font-size:14px;
+  padding:11px 22px; border-radius:var(--radius-pill);
+}
+
+/* "lagi apes" losing-streak flame in the standings */
+.flame {
+  display:inline-flex; align-items:center; font-size:12px; font-weight:700; color:var(--clay);
+  background:var(--clay-tint); padding:1px 7px 1px 5px; border-radius:var(--radius-pill);
+  margin-left:6px; vertical-align:1px; white-space:nowrap;
+}
+@keyframes pecFade { from { opacity:0; } to { opacity:1; } }
+@keyframes pecSlam {
+  0%   { transform:rotate(-13deg) scale(2.8); opacity:0; filter:blur(5px); }
+  55%  { opacity:1; filter:blur(0); }
+  72%  { transform:rotate(-13deg) scale(.9); }
+  100% { transform:rotate(-13deg) scale(1); opacity:1; }
+}
+
 @media (prefers-reduced-motion: reduce) { *, .sheet { transition:none !important; animation:none !important; } }

@@ -4,3 +4,9 @@ node_modules/
 # exported backups (runtime artifacts)
 LOTD-*.json
 .vercel
+
+# Supabase local-dev artifacts — local keys/state, NEVER commit
+supabase/.temp/
+supabase/.branches/
+supabase/functions/.env
+supabase/functions/.env.local

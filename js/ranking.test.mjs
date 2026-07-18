@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  computeStandings, biggestLoserAllTime, biggestLoserForDate, MODES,
+  computeStandings, biggestLoserAllTime, biggestLoserForDate, losingStreak, MODES,
 } from './ranking.mjs';
 
 // Hand-computed from PRD v3 Appendix A + BUILD-PLAN E2 vectors. Expected values come
@@ -165,4 +165,31 @@ test('biggestLoserForDate: a day with no games → empty array', () => {
 test('biggestLoserForDate: ties return every tied name', () => {
   const games = [...GAMES, { game_date: '2026-07-15', loser: 1 }]; // Ade 2, Bima 2
   assert.deepEqual(biggestLoserForDate(games, PLAYERS, '2026-07-15'), ['Ade', 'Bima']);
+});
+
+// ---------- losingStreak ----------
+// Games are newest-first, exactly as loadBoard returns them.
+const STREAK_GAMES = [
+  { p1: 1, p2: 2, p3: 3, p4: 4, loser: 1 }, // newest — P1 lost
+  { p1: 1, p2: 2, p3: 3, p4: 4, loser: 1 }, // P1 lost
+  { p1: 1, p2: 2, p3: 3, p4: 4, loser: 2 }, // P1 played but didn't lose → streak stops
+  { p1: 1, p2: 2, p3: 3, p4: 4, loser: 1 }, // (older loss, not counted)
+];
+
+test('losingStreak: counts consecutive most-recent losses, stops at a non-loss', () => {
+  assert.equal(losingStreak(STREAK_GAMES, 1), 2);
+});
+
+test('losingStreak: skips games the player did not play', () => {
+  const games = [
+    { p1: 1, p2: 2, p3: 3, p4: 4, loser: 1 }, // P1 lost
+    { p1: 2, p2: 3, p3: 4, p4: 5, loser: 2 }, // P1 not in — skipped
+    { p1: 1, p2: 2, p3: 3, p4: 4, loser: 1 }, // P1 lost
+  ];
+  assert.equal(losingStreak(games, 1), 2);
+});
+
+test('losingStreak: 0 when the newest game they played was not a loss (or no games)', () => {
+  assert.equal(losingStreak(STREAK_GAMES, 2), 0); // P2's newest game was a win
+  assert.equal(losingStreak([], 1), 0);
 });

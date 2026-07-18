@@ -17,9 +17,10 @@ export const MODES = {
 
 // Derive the display stats a v_standings row implies.
 function decorate(row) {
-  const { name, gp, losses, archived } = row;
+  const { player_id, name, gp, losses, archived } = row;
   const loss_rate = gp > 0 ? losses / gp : null;   // null, not 0 — guards divide-by-zero
   return {
+    player_id,
     name,
     gp,
     losses,
@@ -69,6 +70,20 @@ export function biggestLoserAllTime(rows) {
   const max = rows.reduce((m, r) => Math.max(m, r.losses ?? 0), 0);
   if (max <= 0) return [];
   return rows.filter((r) => r.losses === max).map((r) => r.name).sort(alpha);
+}
+
+// games (newest-first, as loadBoard returns them) + a player id -> the player's *current*
+// losing streak: how many of their most-recent consecutive games they lost. Games they
+// didn't play are skipped; the streak ends at the first game they played but didn't lose.
+// "Lagi apes" — someone who keeps losing every time they sit down.
+export function losingStreak(games, playerId) {
+  let streak = 0;
+  for (const g of games) {
+    if (![g.p1, g.p2, g.p3, g.p4].includes(playerId)) continue;
+    if (g.loser === playerId) streak += 1;
+    else break;
+  }
+  return streak;
 }
 
 // games/players/dateStr -> array of name(s) with the most losses on that date ([] if none).

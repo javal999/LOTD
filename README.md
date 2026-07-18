@@ -15,10 +15,16 @@ is next; it wires in at deploy.
 
 ## Run locally
 ```sh
-python3 -m http.server 8138   # then open http://localhost:8138
+python3 -m http.server 8138   # then open http://localhost:8138/?mock=1
 ```
-Mock data resets on reload. The mock unlock accepts any passcode **locally** — the
-real passcode gate is server-side (admin Edge Function), never in the browser.
+`?mock=1` runs the whole app on in-memory demo data (a seeded board + players) with **no
+Supabase and no passcode** — log games and see the **PECUNDANG** reveal instantly. Data
+resets on reload. Without `?mock=1` the app talks to the configured backend.
+
+**Logging by confession:** tap **Log game**, type `<name> pecundang` (e.g. `Levi
+pecundang`) to name the loser — they're auto-added as the 4th player — then pick the 3
+others who played. The confess-word doubles as the shared secret, so no separate unlock is
+needed; on the live backend set `ADMIN_PASSCODE=pecundang`.
 
 ## Test
 ```sh
