@@ -1,7 +1,7 @@
 import * as api from './api.js';
 import { buildExport } from './export.mjs';
 import {
-  computeStandings, biggestLoserAllTime, biggestLoserForDate,
+  computeStandings, biggestLoserAllTime, biggestLoserForDate, losingStreak,
   MODES, LUCK_BASELINE, MIN_GAMES_FOR_RATE,
 } from './ranking.mjs';
 
@@ -12,6 +12,11 @@ let boardId = null;
 let data = null;      // { standings, games, players }
 let mode = MODES.HIGHEST_LOSS_RATE;  // default to the skill view — worst first, like the spotlight
 let error = null;
+
+// The confess-word. Typing "<name> pecundang" in the log box both names the loser and
+// proves the shared secret to the server, so no separate unlock is needed to log a game.
+// On the live backend, set ADMIN_PASSCODE to this exact word (`supabase secrets set`).
+const LOSER_WORD = 'pecundang';
 
 // ---- helpers ----
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -184,11 +189,13 @@ function openPlayers() {
   draw();
 }
 
+// Log a game by confession: type "<name> pecundang" to name the loser, then pick the 3
+// others who played. The loser is auto-included as the 4th player — they were obviously in
+// the game they lost. No unlock needed: the confess-word itself is the secret.
 function openLog() {
   const act = activePlayers();
   const today = api.localToday();
-  let selected = act.length === 4 ? act.map((p) => p.id) : [];  // 3-tap case: pre-set
-  let loser = null;
+  ensureAudio();  // prime audio on this user gesture so the loser jingle can play on save
 
   if (act.length < 4) {
     const box = el(`<div class="sheet"><h2>Log a game</h2>
@@ -199,57 +206,93 @@ function openLog() {
     return;
   }
 
-  const box = el(`<div class="sheet"><h2>Log a game</h2>
-    <p class="sheet-sub" id="hint"></p>
-    <label class="field-label" for="d">Date</label>
-    <input class="field" type="date" id="d" value="${today}" max="${today}">
-    <p class="field-label">Who played (pick 4)</p>
-    <div class="chips" id="chips"></div>
-    <p class="field-label" id="wholost">Who lost?</p>
-    <div class="loser-grid" id="grid"></div>
-    <p class="sheet-error" id="err"></p>
-    <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
-    <button class="btn-primary" id="save" disabled>Save game</button></div></div>`);
-  const close = openSheet(box);
-  const chips = box.querySelector('#chips'), grid = box.querySelector('#grid');
-  const save = box.querySelector('#save'), hint = box.querySelector('#hint');
-  const dateEl = box.querySelector('#d'), err = box.querySelector('#err');
-  const wholost = box.querySelector('#wholost');
+  let loser = null;   // player id, parsed from the confess box
+  let others = [];    // up to 3 other player ids who played
 
-  function draw() {
-    hint.textContent = selected.length === 4
-      ? 'Tap the one player who lost.'
-      : `Pick ${4 - selected.length} more player${4 - selected.length === 1 ? '' : 's'}.`;
-    chips.innerHTML = act.map((p) => {
-      const on = selected.includes(p.id);
-      const full = selected.length >= 4 && !on;
+  const box = el(`<div class="sheet sheet-log">
+    <h2 class="pec-title">Siapa pecundangnya?</h2>
+    <input class="field pec-input" id="pec" placeholder="${esc(act[0].name)} ${LOSER_WORD}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <p class="sheet-sub pec-sub" id="hint">Ketik <b>nama + ${LOSER_WORD}</b> — yang kalah ketebak otomatis.</p>
+    <div id="rest" hidden>
+      <div class="loser-card" id="losercard"></div>
+      <p class="pick-label">Yang ikut main <span class="pick-count" id="pickcount">pilih 3</span></p>
+      <div class="chips chips-lg" id="chips"></div>
+      <button type="button" class="date-toggle" id="datetoggle">🗓️ <span id="datelabel">Hari ini</span> · <u>ubah tanggal</u></button>
+      <div class="date-wrap" id="datewrap" hidden>
+        <input class="field" type="date" id="d" value="${today}" max="${today}">
+      </div>
+    </div>
+    <p class="sheet-error" id="err"></p>
+    <div class="sheet-actions">
+      <button class="btn-ghost" data-close>Batal</button>
+      <button class="btn-primary" id="save" disabled>Simpan</button>
+    </div></div>`);
+  const close = openSheet(box);
+  const pec = box.querySelector('#pec'), hint = box.querySelector('#hint');
+  const rest = box.querySelector('#rest'), losercard = box.querySelector('#losercard');
+  const chips = box.querySelector('#chips'), save = box.querySelector('#save');
+  const dateEl = box.querySelector('#d'), err = box.querySelector('#err');
+  const pickcount = box.querySelector('#pickcount');
+  const datetoggle = box.querySelector('#datetoggle'), datewrap = box.querySelector('#datewrap'), datelabel = box.querySelector('#datelabel');
+
+  // "Budi Santoso pecundang" -> the active player named "Budi Santoso" (case-insensitive),
+  // or null. The last word must be the confess-word; everything before it is the name.
+  const parseLoser = (val) => {
+    const parts = val.trim().split(/\s+/);
+    if (parts.length < 2 || parts[parts.length - 1].toLowerCase() !== LOSER_WORD) return null;
+    const name = parts.slice(0, -1).join(' ').toLowerCase();
+    return act.find((p) => p.name.toLowerCase() === name) ?? null;
+  };
+
+  function drawChips() {
+    chips.innerHTML = act.filter((p) => p.id !== loser).map((p) => {
+      const on = others.includes(p.id);
+      const full = others.length >= 3 && !on;
       return `<button class="chip${on ? ' on' : ''}" data-id="${p.id}" aria-pressed="${on}"${full ? ' disabled' : ''}>${esc(p.name)}</button>`;
     }).join('');
-    const ready = selected.length === 4;
-    wholost.hidden = !ready;
-    grid.innerHTML = ready ? selected.map((id) =>
-      `<button class="tile${loser === id ? ' sel' : ''}" data-loser="${id}" aria-pressed="${loser === id}">
-        <span class="tname">${esc(nameOf(id))}</span><span class="tlost">${loser === id ? 'lost' : ''}</span></button>`).join('') : '';
-    save.disabled = !(ready && loser != null && dateEl.value && dateEl.value <= today);
+    const done = others.length === 3;
+    pickcount.textContent = done ? 'siap ✓' : `${others.length}/3`;
+    pickcount.classList.toggle('done', done);
   }
+  const sync = () => { save.disabled = !(loser && others.length === 3 && dateEl.value && dateEl.value <= today); };
 
+  pec.addEventListener('input', () => {
+    err.textContent = '';
+    const p = parseLoser(pec.value);
+    if (p) {
+      loser = p.id; others = others.filter((id) => id !== p.id);
+      rest.hidden = false;
+      losercard.innerHTML = `<span class="lc-emoji">😈</span>
+        <span class="lc-col"><span class="lc-name">${esc(p.name)}</span><span class="lc-text">jadi pecundang</span></span>`;
+      hint.innerHTML = 'Salah ketik? Ganti aja namanya di atas.';
+      drawChips();
+    } else {
+      loser = null; rest.hidden = true;
+      hint.innerHTML = `Ketik <b>nama + ${LOSER_WORD}</b> — yang kalah ketebak otomatis.`;
+    }
+    sync();
+  });
   chips.addEventListener('click', (e) => {
     const id = Number(e.target.closest('.chip')?.dataset.id); if (!id) return;
-    if (selected.includes(id)) { selected = selected.filter((x) => x !== id); if (loser === id) loser = null; }
-    else if (selected.length < 4) selected.push(id);
-    draw();
+    if (others.includes(id)) others = others.filter((x) => x !== id);
+    else if (others.length < 3) others.push(id);
+    drawChips(); sync();
   });
-  grid.addEventListener('click', (e) => {
-    const id = Number(e.target.closest('.tile')?.dataset.loser); if (id) { loser = id; draw(); }
-  });
-  dateEl.addEventListener('change', draw);
+  datetoggle.addEventListener('click', () => { datewrap.hidden = !datewrap.hidden; if (!datewrap.hidden) dateEl.focus(); });
+  dateEl.addEventListener('change', () => { datelabel.textContent = dateEl.value === today ? 'Hari ini' : dateEl.value; sync(); });
   save.addEventListener('click', async () => {
-    const okd = await attempt(err, async () => {
-      await api.logGame({ leaderboard_id: boardId, game_date: dateEl.value, players: selected, loser });
-    });
-    if (okd) { const who = nameOf(loser); close(); await refresh(); showToast(who); }
+    const name = nameOf(loser);
+    const players = [loser, ...others];
+    const okd = await attempt(err, () =>
+      api.logGame({ leaderboard_id: boardId, game_date: dateEl.value, players, loser, secret: LOSER_WORD }));
+    if (okd) {
+      close(); await refresh();
+      showPecundang(name, async () => {
+        if (await attempt(null, () => api.undoLast(boardId, LOSER_WORD))) await refresh();
+      });
+    }
   });
-  draw();
+  pec.focus();
 }
 
 function openGames() {
@@ -301,18 +344,86 @@ function openGames() {
   draw();
 }
 
-let toastTimer;
-function showToast(who) {
-  document.querySelector('.toast')?.remove();
-  clearTimeout(toastTimer);
-  const toast = el(`<div class="toast" role="status" aria-live="polite">
-    <span><strong>${esc(who)}</strong> lost this one</span>
-    <button class="toast-undo" id="undo">Undo</button></div>`);
-  document.body.appendChild(toast);
-  toast.querySelector('#undo').addEventListener('click', async () => {
-    if (await attempt(null, () => api.undoLast(boardId))) { toast.remove(); await refresh(); }
-  });
-  toastTimer = setTimeout(() => toast.remove(), 6000);
+// A random cheeky roast to twist the knife. {name} is filled with the loser's name.
+const ROASTS = [
+  'Konsisten juga jadi pecundang 😹',
+  'Yah, {name} lagi 🤣',
+  'Skill issue, {name} 💀',
+  'Emang jodohnya sama kekalahan 💔',
+  'Trofi pecundang buat {name} 🏆',
+  'Nangis boleh, kalah tetep kalah 😭',
+  'Gg {name}, gg 🫡',
+  'Lagi apes apa emang gitu? 🤔',
+  'Legend baru: {name} sang pecundang ⭐',
+  'Sabar ya {name}, rezeki gak kemana (menang iya) 😌',
+];
+const roastFor = (name) => ROASTS[Math.floor(Math.random() * ROASTS.length)].replaceAll('{name}', name);
+
+// ---- mocking "you lose" jingle (synthesized, no audio file) ----
+// One shared AudioContext, primed on a user gesture (the Log button) so the browser lets
+// it play. ensureAudio() is safe to call repeatedly.
+let audioCtx;
+function ensureAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = audioCtx || new AC();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch { /* no audio — fine */ }
+}
+
+// The classic sad trombone: "womp · womp · womp · wommmp" — three descending notes then a
+// fourth that sags down. Sawtooth through a lowpass = brassy; a slow LFO adds the wobble.
+function playLoserSound() {
+  try {
+    ensureAudio();
+    if (!audioCtx) return;
+    const ctx = audioCtx, t0 = ctx.currentTime;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 1500; lp.Q.value = 0.7;
+    lp.connect(ctx.destination);
+    const lfo = ctx.createOscillator(), lfoGain = ctx.createGain();
+    lfo.frequency.value = 5.5; lfoGain.gain.value = 6; lfo.connect(lfoGain);
+    lfo.start(t0); lfo.stop(t0 + 2.2);
+    const notes = [
+      [311.13, 0.00, 0.26, null],   // Eb4
+      [293.66, 0.28, 0.26, null],   // D4
+      [277.18, 0.56, 0.26, null],   // Db4
+      [261.63, 0.84, 0.90, 174.61], // C4 sagging down to F3 — the "wommmp"
+    ];
+    for (const [f, t, d, bend] of notes) {
+      const s = t0 + t, e = s + d;
+      const osc = ctx.createOscillator(); osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(f, s);
+      if (bend) osc.frequency.exponentialRampToValueAtTime(bend, e);
+      lfoGain.connect(osc.frequency);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(0.28, s + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, e);
+      osc.connect(g); g.connect(lp);
+      osc.start(s); osc.stop(e + 0.03);
+    }
+  } catch { /* no audio — fine */ }
+}
+
+// The reveal: a rubber-stamp "PECUNDANG" slams over the screen with the loser's name, a
+// random roast, a mocking jingle, and a stuttering buzz. Tap (or wait) to dismiss.
+function showPecundang(name, onUndo) {
+  document.querySelector('.pecundang')?.remove();
+  const o = el(`<div class="pecundang" role="alertdialog" aria-label="${esc(name)} pecundang">
+    <div class="stamp"><span class="stamp-name">${esc(name)}</span><span class="stamp-word">PECUNDANG</span></div>
+    <p class="pec-roast">${esc(roastFor(name))}</p>
+    <button class="pec-undo" id="pundo">salah? undo</button></div>`);
+  document.body.appendChild(o);
+  playLoserSound();
+  // buzz in time with the trombone: three short taunts then a long one
+  try { navigator.vibrate?.([60, 90, 60, 90, 60, 120, 320]); } catch { /* no haptics — fine */ }
+  let timer;
+  const close = () => { clearTimeout(timer); o.remove(); };
+  o.addEventListener('click', (e) => { if (e.target.id !== 'pundo') close(); });
+  o.querySelector('#pundo').addEventListener('click', async (e) => { e.stopPropagation(); close(); await onUndo?.(); });
+  timer = setTimeout(close, 4200);
 }
 
 // ---- export ----
@@ -365,6 +476,9 @@ function spotlightHTML() {
 function rowsHTML(list, ranked) {
   return list.map((p) => {
     const archived = p.archived ? ' <span class="pill-archived">archived</span>' : '';
+    // 🔥 on anyone currently on a losing streak of 2+ — "lagi apes".
+    const streak = losingStreak(data?.games ?? [], p.player_id);
+    const flame = streak >= 2 ? ` <span class="flame" title="Lagi apes — kalah ${streak}× beruntun">🔥${streak}</span>` : '';
     const rate = p.loss_rate === null ? '<span class="muted">–</span>'
       : `${pct(p.loss_rate)}${p.beats_luck ? ` <span class="beats">${CHECK}<span class="sr-only">beats luck</span></span>` : ''}`;
     // No per-row "N more to rank": the divider states the threshold once, which keeps the
@@ -379,7 +493,7 @@ function rowsHTML(list, ranked) {
     ].filter(Boolean).join(' ');
     return `<tr${cls ? ` class="${cls}"` : ''}>
       <td class="rank">${ranked ? p.rank : '<span class="muted">–</span>'}</td>
-      <td class="who">${esc(p.name)}${archived}${need}</td>
+      <td class="who">${esc(p.name)}${flame}${archived}${need}</td>
       <td class="num">${p.gp}</td><td class="num loss">${p.losses}</td>
       <td class="num">${p.games_not_lost}</td><td class="num rate">${rate}</td>
     </tr>`;
@@ -448,6 +562,7 @@ function render() {
   const { ranked, unranked } = computeStandings(data?.standings ?? [], mode);
   const noPlayers = (data?.standings?.length ?? 0) === 0;
   const act = activePlayers().length;
+  document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log button
 
   app.innerHTML = `
     ${unlocked ? `<div class="admin-row">
@@ -459,7 +574,7 @@ function render() {
     ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
       <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
       : tableHTML(ranked, unranked)}
-    ${unlocked ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Needs 4 active players"' : ''}>Log game</button>` : ''}`;
+    ${!noPlayers ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif dulu"' : ''}>Log game</button>` : ''}`;
 
   app.querySelectorAll('.sort button').forEach((b) =>
     b.addEventListener('click', () => { mode = b.dataset.mode; render(); }));

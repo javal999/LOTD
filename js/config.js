@@ -29,3 +29,8 @@ const active = isLocal ? LOCAL : PROD;
 export const SUPABASE_URL = active.url;
 export const SUPABASE_ANON_KEY = active.anonKey;
 export const ADMIN_FN = active.adminFn;
+
+// Demo / mock mode: open the app with `?mock=1` to run entirely on in-memory data with no
+// Supabase and no passcode — so it is fully playable with just `python3 -m http.server`.
+// Data resets on reload. This is what the README's "mock" promise refers to.
+export const USE_MOCK = new URLSearchParams(globalThis.location?.search ?? '').has('mock');
