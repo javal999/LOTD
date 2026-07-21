@@ -73,7 +73,7 @@ function openSheet(box) {
 function openPasscode() {
   const box = el(`<div class="sheet"><h2>Unlock to manage</h2>
     <p class="sheet-sub">Enter the admin passcode. Only the scorekeeper changes results — it's checked by the server and kept for this tab only.</p>
-    <input class="field" type="password" inputmode="numeric" id="pc" placeholder="Passcode" autocomplete="off">
+    <input class="field" type="password" id="pc" placeholder="Passcode" autocomplete="off">
     <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
     <button class="btn-primary" id="go">Unlock</button></div></div>`);
   const close = openSheet(box);
