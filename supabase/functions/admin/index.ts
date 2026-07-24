@@ -58,7 +58,25 @@ async function passcodeMatches(given: unknown): Promise<boolean> {
 
 const isIsoDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isId = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
+const isScore = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0;
 const utcToday = () => new Date().toISOString().slice(0, 10);
+
+const SPORTS = ['tt_singles', 'tt_doubles', 'padel'] as const;
+
+// Friendly score check mirroring the DB CHECK, so the user sees a sentence, not a constraint
+// name. The `valid_score` / `decisive` constraints are still the last line of defence.
+function scoreError(sport: string, a: number, b: number): string | null {
+  if (a === b) return 'a game must have a winner — no draws';
+  if (sport === 'padel') {
+    return a + b === 21 ? null : `a padel round must total 21 points — ${a}–${b} adds to ${a + b}`;
+  }
+  const hi = Math.max(a, b), lo = Math.min(a, b);      // table tennis: first to 11, win by 2
+  if (hi === 11 && lo <= 9) return null;
+  if (hi > 11 && hi - lo === 2) return null;
+  if (hi < 11) return 'someone has to reach 11';
+  if (hi === 11 && lo === 10) return "11–10 isn't possible — from 10–10 you play on until someone leads by 2";
+  return `${a}–${b} isn't a valid table tennis score`;
+}
 
 Deno.serve(async (req) => {
   const ch = corsHeaders(req);
@@ -136,12 +154,18 @@ Deno.serve(async (req) => {
       case 'delete_player': {
         const { player_id } = payload;
         if (!isId(player_id)) return bad('player_id is required');
-        // The server decides archive-vs-delete, not the client.
-        const { count, error: e1 } = await db.from('games')
-          .select('id', { count: 'exact', head: true })
-          .or(`p1.eq.${player_id},p2.eq.${player_id},p3.eq.${player_id},p4.eq.${player_id}`);
-        if (e1) return bad(e1.message);
-        if ((count ?? 0) > 0) {
+        // The server decides archive-vs-delete, not the client. Archive if the player appears in
+        // ANY game — cards or racquet — so results stay in the standings and the ON DELETE RESTRICT
+        // FKs never fire with an ugly error.
+        const [cards, sports] = await Promise.all([
+          db.from('games').select('id', { count: 'exact', head: true })
+            .or(`p1.eq.${player_id},p2.eq.${player_id},p3.eq.${player_id},p4.eq.${player_id}`),
+          db.from('sports_games').select('id', { count: 'exact', head: true })
+            .or(`a1.eq.${player_id},a2.eq.${player_id},b1.eq.${player_id},b2.eq.${player_id}`),
+        ]);
+        if (cards.error) return bad(cards.error.message);
+        if (sports.error) return bad(sports.error.message);
+        if ((cards.count ?? 0) + (sports.count ?? 0) > 0) {
           const { error } = await db.from('players').update({ archived: true }).eq('id', player_id);
           if (error) return bad(error.message);
           log(true, { player_id, archived: true });
@@ -223,6 +247,82 @@ Deno.serve(async (req) => {
         if (error) return bad(error.message);
         log(true, { game_id });
         return ok({ game_id });
+      }
+
+      // ---- racquet games (table tennis + padel) ----
+      case 'log_sports_game': {
+        const { leaderboard_id, sport, game_date, score_a, score_b } = payload;
+        const today = isIsoDate(payload.today) ? payload.today : utcToday();
+        if (!isId(leaderboard_id)) return bad('leaderboard_id is required');
+        if (!SPORTS.includes(sport)) return bad('unknown sport');
+        if (!isIsoDate(game_date)) return bad('game_date must be YYYY-MM-DD');
+        if (game_date > today) return bad("a game can't be dated in the future");
+        if (!isScore(score_a) || !isScore(score_b)) return bad('scores must be whole numbers');
+
+        // Side shape: singles = one per side (a2/b2 absent); doubles/padel = two per side.
+        const singles = sport === 'tt_singles';
+        const a2 = singles ? null : payload.a2;
+        const b2 = singles ? null : payload.b2;
+        if (singles && (payload.a2 != null || payload.b2 != null)) return bad('singles has one player per side');
+        if (!singles && !(isId(a2) && isId(b2))) return bad('doubles needs two players per side');
+
+        const named = [payload.a1, payload.b1, ...(singles ? [] : [a2, b2])];
+        if (!named.every(isId)) return bad(singles ? 'two players are required' : 'four players are required');
+        if (new Set(named).size !== named.length) return bad('a player can only be in a game once');
+
+        const serr = scoreError(sport, score_a, score_b);
+        if (serr) return bad(serr);
+
+        const { data: rows, error: e1 } = await db.from('players')
+          .select('id, leaderboard_id, archived').in('id', named);
+        if (e1) return bad(e1.message);
+        if (!rows || rows.length !== named.length) return bad('unknown player');
+        if (rows.some((r) => r.leaderboard_id !== leaderboard_id)) return bad('all players must belong to this leaderboard');
+        if (rows.some((r) => r.archived)) return bad('an archived player cannot be added to a new game');
+
+        const { data, error } = await db.from('sports_games')
+          .insert({ leaderboard_id, sport, game_date, a1: payload.a1, a2, b1: payload.b1, b2, score_a, score_b })
+          .select().single();
+        if (error) return bad(error.message); // DB CHECKs / composite FK are the final backstop
+        log(true, { leaderboard_id, sports_game_id: data.id });
+        return ok(data);
+      }
+      case 'undo_last_sports': {
+        const { leaderboard_id } = payload;
+        if (!isId(leaderboard_id)) return bad('leaderboard_id is required');
+        const { data: last, error: e1 } = await db.from('sports_games').select('id')
+          .eq('leaderboard_id', leaderboard_id)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(1).maybeSingle();
+        if (e1) return bad(e1.message);
+        if (!last) return ok(null);
+        const { error } = await db.from('sports_games').delete().eq('id', last.id);
+        if (error) return bad(error.message);
+        log(true, { leaderboard_id, sports_game_id: last.id });
+        return ok(last);
+      }
+      case 'edit_sports_score': {
+        const { sports_game_id, score_a, score_b } = payload;
+        if (!isId(sports_game_id)) return bad('sports_game_id is required');
+        if (!isScore(score_a) || !isScore(score_b)) return bad('scores must be whole numbers');
+        const { data: g, error: e1 } = await db.from('sports_games').select('sport').eq('id', sports_game_id).maybeSingle();
+        if (e1) return bad(e1.message);
+        if (!g) return bad('game not found', 404);
+        const serr = scoreError(g.sport, score_a, score_b);
+        if (serr) return bad(serr);
+        const { error } = await db.from('sports_games').update({ score_a, score_b }).eq('id', sports_game_id);
+        if (error) return bad(error.message);
+        log(true, { sports_game_id });
+        return ok({ sports_game_id, score_a, score_b });
+      }
+      case 'delete_sports_game': {
+        const { sports_game_id } = payload;
+        if (!isId(sports_game_id)) return bad('sports_game_id is required');
+        const { error } = await db.from('sports_games').delete().eq('id', sports_game_id);
+        if (error) return bad(error.message);
+        log(true, { sports_game_id });
+        return ok({ sports_game_id });
       }
 
       default:

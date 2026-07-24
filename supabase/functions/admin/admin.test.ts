@@ -77,6 +77,19 @@ Deno.test('security: the public anon key is read-only', async (t) => {
     await res.body?.cancel();
     assert(denied(res.status), `anon DELETE must be denied, got ${res.status}`);
   });
+  await t.step('anon can READ v_sport_standings', async () => {
+    const res = await fetch(`${REST}/v_sport_standings?select=sport,losses`, { headers: h });
+    await res.body?.cancel();
+    assertEquals(res.status, 200);
+  });
+  await t.step('anon INSERT into sports_games is rejected', async () => {
+    const res = await fetch(`${REST}/sports_games`, {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ leaderboard_id: 1, sport: 'tt_singles', a1: 1, b1: 2, score_a: 11, score_b: 7 }),
+    });
+    await res.body?.cancel();
+    assert(denied(res.status), `anon INSERT must be denied, got ${res.status}`);
+  });
 });
 
 // Requires ALLOWED_ORIGIN to be set (as it is in prod). An unknown origin must not get an
@@ -240,6 +253,139 @@ Deno.test('admin function v3', async (t) => {
   });
 
   await t.step('cleanup: delete_leaderboard cascades', async () => {
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: other })).status, 200);
+  });
+});
+
+Deno.test('sports games: table tennis + padel', async (t) => {
+  let lb = 0, other = 0, outsider = 0, sg = 0;
+  const p: number[] = [];
+
+  await t.step('setup: leaderboard + 5 players + an outsider board', async () => {
+    lb = (await call('create_leaderboard', { name: `Sports ${Date.now()}` })).body.data.id;
+    for (const name of ['S1', 'S2', 'S3', 'S4', 'S5']) {
+      p.push((await call('add_player', { leaderboard_id: lb, name })).body.data.id);
+    }
+    other = (await call('create_leaderboard', { name: `SportsOther ${Date.now()}` })).body.data.id;
+    outsider = (await call('add_player', { leaderboard_id: other, name: 'Outsider' })).body.data.id;
+  });
+
+  await t.step('log TT singles 11-7 -> ok, a2 null', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 11, score_b: 7,
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.a2, null);
+    sg = r.body.data.id;
+  });
+
+  await t.step('TT 11-10 rejected (win by 2), with a teaching message', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 11, score_b: 10,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('2'), `expected a win-by-2 message, got: ${r.body.error}`);
+  });
+
+  await t.step('log TT doubles 11-9 -> ok', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_doubles', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 11, score_b: 9,
+    });
+    assertEquals(r.status, 200);
+  });
+
+  await t.step('TT doubles missing a partner -> 400', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_doubles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[2], b2: p[3], score_a: 11, score_b: 9,
+    });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('log padel 13-8 -> ok', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 8,
+    });
+    assertEquals(r.status, 200);
+  });
+
+  await t.step('padel 13-7 (sums 20) -> 400, mentions 21', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 7,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('21'), r.body.error);
+  });
+
+  await t.step('11-10 is VALID as padel (contrast the TT reject)', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 11, score_b: 10,
+    });
+    assertEquals(r.status, 200);
+  });
+
+  await t.step('future date -> 400', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_singles', game_date: TOMORROW, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 11, score_b: 7,
+    });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('same player both sides -> 400', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[0], score_a: 11, score_b: 7,
+    });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('player from another leaderboard -> 400', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: outsider, score_a: 11, score_b: 7,
+    });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('edit_sports_score to an invalid score -> 400', async () => {
+    assertEquals((await call('edit_sports_score', { sports_game_id: sg, score_a: 11, score_b: 10 })).status, 400);
+  });
+
+  await t.step('edit_sports_score to a valid score -> ok', async () => {
+    assertEquals((await call('edit_sports_score', { sports_game_id: sg, score_a: 11, score_b: 5 })).status, 200);
+  });
+
+  await t.step('delete_player with only RACQUET games -> archived, not deleted', async () => {
+    const r = await call('delete_player', { player_id: p[0] });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.archived, true);
+    assertEquals(r.body.data.deleted, false);
+    await call('restore_player', { player_id: p[0] });
+  });
+
+  await t.step('undo_last_sports removes the most recent racquet game', async () => {
+    const a = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_singles', game_date: TODAY, today: TODAY,
+      a1: p[2], b1: p[3], score_a: 11, score_b: 3,
+    });
+    const u = await call('undo_last_sports', { leaderboard_id: lb });
+    assertEquals(u.status, 200);
+    assertEquals(u.body.data.id, a.body.data.id);
+  });
+
+  await t.step('delete_sports_game -> ok', async () => {
+    assertEquals((await call('delete_sports_game', { sports_game_id: sg })).status, 200);
+  });
+
+  await t.step('cleanup', async () => {
     assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
     assertEquals((await call('delete_leaderboard', { leaderboard_id: other })).status, 200);
   });
