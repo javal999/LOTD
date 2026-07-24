@@ -1,891 +1,429 @@
-# PRD v4 — Multi-format games: one standing for table tennis *and* padel
+# PRD v4 (revised) — Add racquet sports without touching the card game
 
 **Status:** Draft for review · **Author:** Levi (with Claude) · **Date:** 2026-07-21
-**Extends:** [PRD v3](PRD-card-game-standings-tracker.md)
-**Driving use case:** one leaderboard the group can use for **both table tennis and padel**, scored
-Americano-style, plus the existing card game.
+**Supersedes:** the first v4 draft (game-types / point-share model), rejected by
+[the council review](COUNCIL-2026-07-21-prd-v4.md). **Extends:** [PRD v3](PRD-card-game-standings-tracker.md).
 
 ---
 
 ## TL;DR
 
-LOTD records exactly one shape of game — **4 players, exactly 1 loser** — welded into the database as
-`p1..p4 + loser`. That rigidity is why the standings have never been wrong, and why it can't record
-a table tennis or padel night.
+The group plays cards, table tennis, and padel. LOTD only understands cards. v4 adds the two sports
+**by adding one new table beside the card table — not by rewriting anything.**
 
-v4 introduces **game types**. A leaderboard enables one or more of them; each logged game picks one
-and *snapshots its rules*. That's what lets a single board hold a 1v1 table tennis game to 11 **and**
-a padel Americano round to 21 — and rank everyone on one honest number.
+Everything reduces to one idea the app already lives by: **a game has a losing side, and everyone on
+it gets stamped PECUNDANG.** Cards pick the loser directly; a racquet game derives the loser from the
+score. Either way it's a loss, and the standing ranks by losses.
 
-**Decisions locked with Levi:**
+**What changed from the first v4 draft** (and why this one is a third the size):
 
-| Decision | Choice |
+| First draft (rejected) | This draft |
 |---|---|
-| Sports on one board | **Table tennis + padel together** |
-| Table tennis format | **Both singles (1v1) and doubles (2v2)** |
-| Unit of record | **One game** — TT: to 11, win by 2 · Padel: a 21-point Americano round |
-| Ranking metric | **Point share** — `points_for / (points_for + points_against)` |
-| Pairings | **Just record** — LOTD never decides who plays whom |
+| Generalise everything to `game → sides → participants` | **Two flat tables**: cards (untouched) + a new sports table |
+| Migrate the 67 live card games | **No migration.** Cards are not touched at all |
+| Give up the "exactly one loser" CHECK; replace with a deferred trigger | **Keep CHECK constraints** — a racquet game is one flat row, so the DB still guarantees it structurally. The trigger the council proved couldn't fire is never needed |
+| Rank by point share | **Rank by losses (Loss Index)**, with point share only as a tiebreak |
+| Two "scoring families" that can't mix | One idea — losses — so cards and sports share **one board** honestly |
 
-**Why one board works:** point share is *length-independent*. A table tennis 11–7 (share `0.611`) and
-a padel 13–8 (share `0.619`) are directly comparable, because both ask the same question — what
-fraction of the points on the table did you win? Total points could never do this; that's the single
-most important consequence of Levi's metric choice.
-
-**LOTD stays LOTD.** Every format still answers: *who is the biggest loser?*
+**LOTD stays LOTD.** Every game still answers one question: *who lost?*
 
 ---
 
 ## 1. Problem statement
 
-The group plays three things — cards, table tennis, padel — and the scoreboard understands one.
+The group plays three things; the scoreboard understands one.
 
-- **Player count is fixed at 4.** A table tennis 1v1 can't be logged at all.
-- **No concept of a side.** Every player is an island, so doubles and padel are unrecordable.
-- **"Who lost" is the only outcome.** Scores have nowhere to go: an 11–0 thrashing and an 11–9
-  nailbiter would look identical even if we could log them.
-- **One sport per app.** Even after adding sports, forcing a separate board per sport splits the
-  group's rivalry into disconnected silos.
+- A table tennis 1v1 can't be logged — the app requires exactly 4 players.
+- There's no concept of a side, so doubles and padel are unrecordable.
+- Scores have nowhere to go: an 11–0 thrashing and an 11–9 nailbiter would look identical.
 
-**Cost of not solving it:** the table tennis and padel standings live in WhatsApp threads or separate
-apps, the rivalry data fragments, and LOTD stops being the one place the running joke lives. The joke
-is the product.
-
-**Evidence:** the live `Seven P3` board has 7 players, but every game must be squeezed into groups of
-exactly 4, so whoever sits out is invisible to the record.
+**Cost:** the table tennis and padel rivalries live in WhatsApp threads and forget themselves. LOTD's
+value is that it *remembers* — who's been losing since March. The joke is the product, and right now
+two-thirds of the group's games aren't in on it.
 
 ---
 
-## 2. Research
+## 2. Goals & non-goals
 
-### Table tennis (ITTF, since 2001)
-- A game is **first to 11**, and you must **win by 2**.
-- At **10–10 (deuce)** play continues until someone leads by two: `12–10`, `15–13`, even `23–21`.
-- Pre-2001 games were to 21, and some social groups still play that way — the target must be
-  configurable.
+### Goals
+1. **Log a racquet game in under 10 seconds** — pick players, type two scores, save.
+2. **Table tennis (singles + doubles) and padel on the same board as cards**, one combined rivalry.
+3. **Ranking stays loss-based and honest across game types** — a card loss and a padel loss are
+   comparable via Loss Index.
+4. **Zero regression, zero risk to card history** — the card table, its constraints, and its 3-tap
+   flow are literally unchanged.
 
-**Consequences:** `11–10` is an **impossible** score, and table tennis **cannot end in a draw**
-(win-by-2 guarantees a winner).
-
-### Padel Americano / Mexicano
-You always play doubles but **score as an individual** — the score your side achieves is also your
-personal score. A **21-point round** finishing 13–8 gives *each* winner 13 and *each* loser 8.
-Partners rotate; the points are always yours. Mexicano differs only in regenerating pairings from the
-live leaderboard each round.
-
-**Consequence — and the thing that breaks a naive design:** an Americano round is a **fixed total**
-of points (`for + against == 21`), not a race to a target.
-
-**A useful accident of Levi's choice:** the group plays to **21, which is odd**, so a round can never
-split evenly — draws are *arithmetically impossible*. The `allow_draws` machinery still has to exist
-(an even target like 24 would need it) but on this board the path stays dormant.
-
-### The two scoring rules
-
-This is the core technical finding of the research:
-
-| Rule | Sport | Validation | Draws |
-|---|---|---|---|
-| **`first_to`** | Table tennis | winner reaches target; optionally win-by-2 | impossible |
-| **`total_points`** | Padel Americano | `for + against == target` exactly | only on an even target |
-
-They are not interchangeable, so **the rule belongs to the game type**, not the board.
-
-**Sources:** [USA Table Tennis — rules](https://www.usatt.org/rules-of-table-tennis) ·
-[Table Tennis Universe — scoring](https://tabletennisuniverse.com/table-tennis-scoring-rules-complete-guide/) ·
-[JudgeMate — sets, deuce & points](https://www.judgemate.com/en/guides/how-table-tennis-scoring-works) ·
-[Killerspin — rules FAQ](https://www.killerspin.com/pages/faq-table-tennis-rules) ·
-[Padeli — social formats](https://padeli.com/get-started/formats/) ·
-[Padel Fast — Americano](https://www.padelfast.com/formats/americano) ·
-[Padel Fast — Mexicano](https://www.padelfast.com/formats/mexicano) ·
-[Simple Padel — Americano scoring](https://simplepadel.com/how-to-play-an-americano-in-padel/) ·
-[Live For Padel — King of the Court](https://www.liveforpadel.com/blog/padel-king-of-the-court)
+### Non-goals
+1. **Not a tournament organiser** — no Americano schedule generation, no auto-pairing. (Benchmarked
+   and rejected: 7 players on 1 court = 11 rounds for a full rotation. A generated schedule dies
+   halfway. A lightweight *partner suggestion* is P1; a schedule is not.)
+2. **No skill ratings (Elo/Glicko).** This tracks losing, not skill.
+3. **No live/in-progress scoring** — log a finished game.
+4. **No match-level record (best of 3/5).** One game is the unit.
+5. **No variable card player-count (2–8) in this release.** Independent of the sports goal; deferred.
+6. **No per-player accounts.** Open-write model stays.
 
 ---
 
-## 3. Goals
+## 3. The model: two tables, one rivalry
 
-1. **One board, both sports.** Log table tennis and padel to the same standing, comparably.
-2. **Log a table tennis game in under 10 seconds** — two players, `11` and `7`, save.
-3. **Singles and doubles together**, no mode switch at board level.
-4. **Any player count** for the card game (2–24 participants, 2–8 sides).
-5. **Numbers stay honest.** Loss Index for existing card games must be *numerically identical* to
-   today's loss rate ÷ 0.25.
-6. **Zero regression for the card group** — today's 3-tap flow stays 3 taps.
+A **leaderboard** (e.g. `Seven P3`) has **players**. Those players play **card games** (today's
+table) and **racquet games** (a new table). The standing unions both.
 
-## 4. Non-goals
+```
+leaderboard ─┬─ players ──┬─ (referenced by) card games      [games — UNCHANGED]
+             │            └─ (referenced by) racquet games   [sports_games — NEW]
+             └─ standing = losses from cards + losses from racquet, ranked
+```
 
-1. **Not a tournament organiser.** No upfront Americano schedule, no multi-court allocation, no
-   Mexicano re-pairing. *(Levi's choice: "just record". See §11 for the benchmark and the maths that
-   backs this up — a **partner suggestion** is in scope as P1; a generated schedule is not.)*
-2. **No skill ratings (Elo/Glicko).** Changes the product from "who lost" to "who is good".
-3. **No live/in-progress scoring.**
-4. **No match-level record (best of 3/5).** One game is the unit; a match is several rows.
-5. **No mixing points-based and loss-based games on one board.** Cards stay on their own board — see
-   §7.4 for why this is the one mix with no honest maths.
-6. **No per-player accounts.** Open-write model stays as decided.
+- **Players are shared.** The same Levi plays cards and padel as one player row. That's what makes it
+  "one place for the rivalry."
+- **The two game tables never mix physically.** Cards keep their `p1..p4 + loser` shape and their
+  "pick who lost" mechanic. Racquet games are a different shape with a different mechanic (derive the
+  loser from the score). They only meet in a **read-only view** that adds up losses.
+- **Nothing about cards changes** — not the table, not the CHECKs, not the Edge Function's card
+  actions, not the 3-tap flow.
+
+### Why a flat racquet table (and why it matters)
+
+A racquet game is **2 sides of 1–2 players with a score.** That fits in one flat row:
+
+```
+a1, a2(nullable), b1, b2(nullable), score_a, score_b, sport
+```
+
+Because it's one row, the same trick that has kept card standings perfect — **CHECK constraints** —
+enforces every rule: a valid score, no draw, distinct players, a consistent side shape. **We keep the
+structural guarantee.** The deferred trigger the first draft needed (and that the council proved
+couldn't fire, because writes are separate transactions) simply never exists here.
 
 ---
 
-## 5. Game types — the key concept
+## 4. Scoring
 
-A **game type** is a named bundle of rules. A board **enables** one or more; each game **picks** one
-and snapshots its rules.
+### 4.1 The loser of a racquet game
+The side with the **lower score** lost. **Everyone on the losing side is stamped and takes one loss**
+(both players, in doubles). Singles = one loser. Cards = the one chosen loser. Same currency: a loss.
 
-### 5.1 Built-in game types
+### 4.2 Ranking: Loss Index (primary)
 
-| Game type | Sides | Players/side | Scoring rule | Target | Win by 2 | Draws |
-|---|---|---|---|---|---|---|
-| **Table tennis — singles** | 2 | 1 | `first_to` | 11 | ✅ | ❌ |
-| **Table tennis — doubles** | 2 | 2 | `first_to` | 11 | ✅ | ❌ |
-| **Padel — Americano** | 2 | 2 | `total_points` | **21** | — | ❌ *(21 is odd)* |
-| **Card game — odd one out** | 3–8 | 1 | `elimination` | — | — | ❌ |
-| **Custom** | pick | pick | pick | pick | pick | pick |
-
-Types 1–3 are **points family**; type 4 is **loss family**. A board may enable any number of types
-**within one family**.
-
-### 5.2 Why the rules live on the type, not the board
-
-Because the group plays both sports on one board, a board-level `points_target` is meaningless — is
-it 11 or 21? Attaching rules to the game type solves it, and snapshotting them onto each game row at
-write time means:
-
-- A table tennis game validates as *first to 11, win by 2*.
-- A padel round logged an hour later validates as *totals must sum to 21*.
-- Both live on the same board, each permanently self-describing.
-- Changing a type's default later **never invalidates history**.
-
-> **This snapshot is the mechanism that makes a single multi-sport standing possible.** Without it,
-> editing the padel target would silently corrupt every table tennis game's validity.
-
----
-
-## 6. Create a leaderboard — the full field spec
-
-> The part Levi asked for specifically: what the app must ask when making a new board.
-
-**Design principle: presets do the work.** The common path is *name → pick sports → Create*.
-Everything else sits behind an **Advanced** disclosure.
-
-### 6.1 Fields
-
-| # | Field | Required | Default | Editable later? | Why it exists |
-|---|---|---|---|---|---|
-| 1 | **Name** | yes | — | ✅ rename anytime | Board identity, unique |
-| 2 | **What do you play?** *(multi-select)* | yes | — | ✅ add types anytime | **Enables one or more game types.** Tick *Table tennis* and *Padel* for one combined board |
-| 3 | **Scoring family** | derived | from types | ❌ **locked at first game** | `points` vs `loss` — the one mix with no honest maths (§7.4) |
-| 4 | **Ranking metric** | yes | Point share | ✅ anytime | Point share / total points / loss index — a *view*, not a commitment (§6.4) |
-| 5 | **Min games to rank** | yes | `5` | ✅ anytime | Provisional threshold |
-| 6 | **Default game type** | no | first enabled | ✅ anytime | What the log sheet opens on |
-| 7 | *(per type)* **Target / round length** | no | type default | ✅ **editable input**, snapshotted per game | A number field: 11 for TT, **21 for padel**. Editable at board setup *and* per round (§10 Flow C) |
-| 8 | *(per type)* **Win by 2** | no | type default | ✅ snapshotted per game | Deuce handling |
-| 9 | *(per type)* **Allow draws** | no | type default | ✅ where legal | Auto-off when win-by-2 |
-
-### 6.2 The combined board, concretely
+For every game a player played, their expected share of the blame is `1 / (number of sides)`:
 
 ```
-Name:            Geng Olahraga
-What do you play? ☑ Table tennis — singles
-                  ☑ Table tennis — doubles
-                  ☑ Padel — Americano
-                  ☐ Card game — odd one out     ← greyed out: different family (§7.4)
-Ranking metric:   Point share
-Min games:        5
-```
-
-Three taps past the name, and the board handles both sports.
-
-Note the card game is **greyed out with an explanation**, not hidden — the UI should teach why, not
-just refuse.
-
-### 6.3 What locks, and why
-
-Only **scoring family** locks, at the first logged game. Loss-based and points-based standings answer
-different questions and cannot be merged honestly. Attempting to change returns `409` with
-export-and-recreate guidance.
-
-Everything else stays editable because of the §5.2 snapshot.
-
-### 6.4 Ranking metric is a *view*, not a commitment
-
-A points board stores full scores, so it also knows who won each game. **Choosing point share throws
-nothing away** — standings can toggle to win/loss (Loss Index) any time from the same stored data.
-The setting only decides which number leads.
-
----
-
-## 7. Scoring
-
-### 7.1 Point share — and why it makes one board possible
-
-```
-point_share = points_for / (points_for + points_against)
-```
-
-**Length-independent**, which is exactly what a multi-sport board needs:
-
-| Game | Score | Share |
-|---|---|---|
-| Table tennis singles | 11–7 | `11/18 = 0.611` |
-| Table tennis deuce | 15–13 | `15/28 = 0.536` |
-| Padel Americano | 13–8 | `13/21 = 0.619` |
-
-All three are the same question: *what fraction of the points on the table did you win?* Total points
-could never do this — a padel round would outweigh three table tennis games purely by being longer.
-
-Chance baseline is `1 / sides` = **0.50** for every type here, mirroring the card game's 25% for
-4 sides. **Biggest loser = lowest point share.** Total points stays on screen as a secondary column
-because players enjoy watching it climb.
-
-### 7.2 Loss Index (card board)
-
-For each **decisive** game, expected share of blame is `1 / sides`:
-
-```
-expected_losses = Σ 1 / sides(game)      over decisive games
+expected_losses = Σ 1/sides         cards → 0.25 each · racquet → 0.50 each
 loss_index      = actual_losses / expected_losses
 ```
 
-`1.00` = exactly chance · `>1.00` = pecundang zone · `<1.00` = beating luck.
+`1.00` = exactly what chance predicts · `> 1.00` = the pecundang zone · `< 1.00` = beating luck.
 
-**Migration-safety property:** on an all-4-player board every game contributes 0.25, so
-`loss_index = loss_rate / 0.25`, and today's "beats luck" (`<25%`) becomes exactly `loss_index < 1.0`.
-**Existing standings don't change meaning** — they get a new scale.
+This is the single number that makes cards and sports comparable. A player who loses half their padel
+rounds (expected) and a quarter of their card games (expected) sits at exactly `1.00` on both.
+On a card-only history it equals today's `loss_rate ÷ 0.25`, so **existing standings keep their
+meaning** and just gain a scale.
 
-### 7.3 The daily spotlight
+### 4.3 Tiebreak: point share
 
-LOTD's identity is the daily roast, so the daily card stays outcome-based even on a points board:
+When players tie on Loss Index, the one who won a **smaller share of the points they played** is the
+bigger loser:
 
-> **Today's biggest loser = most games lost today**, across whatever they played.
-> Tiebreak: lowest point share today.
+```
+point_share = points_for / (points_for + points_against)     -- racquet games only
+```
 
-Losing at table tennis *and* padel on the same day should absolutely count double. All-time uses the
-board's ranking metric.
+Point share is *only* a tiebreak — it never decides #1 — so it can't invert the loser board (the
+flaw that sank the first draft's plan to rank by it). It's free: we store the scores anyway to find
+the loser.
 
-### 7.4 Why cards can't join the sports board
+**Full tiebreak chain:** Loss Index → point share (players with no scored games skip this) → games
+played → name A→Z.
 
-Cards produce **no scores** — only "who lost". Sports produce scores. Point share is undefined for a
-card game, and Loss Index throws away the margins that make the sports board interesting. Any merge
-would silently rank people on a number that means something different per row.
-
-**Decision: cards keep their own board.** This is a product constraint, not a technical one, and the
-UI should say so plainly in the create form.
+### 4.4 The daily stamp — "Loser of the Day"
+**Most games lost today**, counting cards and racquet games together. Raw count, as today. Ties render
+`A & B · tied`. This is the app's identity and it stays a simple, visceral count.
 
 ---
 
-## 8. Score validation
+## 5. Score validation
 
-### 8.1 `first_to` — table tennis
+A racquet row is rejected unless the score is legal for its `sport`. Both rules are pure CHECK
+constraints on the row.
 
+### Table tennis (`tt_singles`, `tt_doubles`) — first to 11, win by 2
 ```
-w > l  and  l >= 0  and  w >= target
-if win_by_2:  (w == target and l <= target-2)  or  (w > target and w - l == 2)
-else:          w == target
+w = max(a,b), l = min(a,b)
+valid iff  a <> b  and  ( (w == 11 and l <= 9)  or  (w > 11 and w - l == 2) )
 ```
-
-For `target = 11, win_by_2 = on`:
 
 | Score | Verdict | Why |
 |---|---|---|
 | `11–0` … `11–9` | ✅ | clean win |
-| `12–10`, `13–11`, `15–13`, `23–21` | ✅ | deuce, margin exactly 2 |
-| `11–10` | ❌ **impossible** | winner must lead by 2 |
-| `11–11` | ❌ | never a final score |
+| `12–10`, `15–13`, `23–21` | ✅ | deuce, margin 2 |
+| `11–10` | ❌ | must win by 2 |
 | `12–9`, `13–10` | ❌ | game already ended at 11–9 / 12–10 |
-| `12–11` | ❌ | margin is 1 |
+| `12–11` | ❌ | margin 1 |
 | `10–8` | ❌ | nobody reached 11 |
-| `9–11` | ✅ | order-independent; larger side wins |
 
-### 8.2 `total_points` — padel Americano
-
+### Padel Americano — a 21-point round
 ```
-for + against == target  and  both >= 0
-if not allow_draws:  for != against
+valid iff  a + b == 21  and  a <> b     (a<>b is automatic: 21 is odd)
 ```
-
-For `target = 21`:
 
 | Score | Verdict | Why |
 |---|---|---|
-| `13–8`, `21–0`, `12–9` | ✅ | sums to 21 |
-| `11–10` | ✅ | sums to 21 — a one-point round is legal here |
-| `13–7` | ❌ | sums to 20 — a point is missing |
+| `13–8`, `21–0`, `11–10` | ✅ | sums to 21 |
+| `13–7` | ❌ | sums to 20 |
 | `14–8` | ❌ | sums to 22 |
-| `11–7` | ❌ | sums to 18 — that's a table tennis score on a padel round |
-| any draw | n/a | impossible: 21 is odd, so the scores can never be equal |
 
-### 8.3 The case that proves the whole design
-
-**`11–10` is valid padel and invalid table tennis.**
-
-- Padel (`total_points`, 21): `11 + 10 = 21` ✅
-- Table tennis (`first_to` 11, win by 2): margin is 1 ❌ — *"at 10–10 you play on until someone leads by 2"*
-
-Identical numbers, opposite verdicts, on the same board, on the same evening. This is exactly why the
-scoring rule belongs to the **game type** and is **snapshotted onto the game** — a single board-level
-validator could not get both right.
-
-Error messages must teach, not scold: *"A padel round is 21 points total — 13–7 only adds to 20."*
+### The test that proves the design
+**`11–10` is valid padel and invalid table tennis** — same numbers, opposite verdicts, decided by the
+row's own `sport`. One flat table, one CHECK, both right. This is the sharpest single unit test in v4.
 
 ---
 
-## 9. User stories
-
-**Multi-sport (new, primary)**
-- As a player, I want table tennis and padel on one standing, so there's a single running joke.
-- As a player, I want the app to know a padel round is 21 points and a TT game is to 11, so I never
-  have to remember which rules apply.
-- As a player, I want my padel and table tennis results comparable, so the standing means something.
-
-**Table tennis**
-- As a player, I want to log a 1v1 by typing two numbers.
-- As a player, I want doubles credited to me personally, so my standing reflects my night and not my
-  luck with partners.
-- As a player, I want an impossible score rejected with an explanation.
-
-**Card group (must not regress)**
-- As a card player, I want the same 3-tap flow as today.
-- As a card player, I want to log a 5- or 6-player night.
-
-**Everyone**
-- As a player, I want to know whether I'm unlucky or actually bad.
-- As a scorekeeper, I want to fix a wrong score without deleting the game.
-- As a new player, I want my rank marked provisional until I've played enough.
-
----
-
-## 10. Step-by-step: how to use it
-
-### Flow A — Create the combined sports board
-
-1. Unlock → **New leaderboard**.
-2. **Name:** `Geng Olahraga`.
-3. **What do you play?** tick **Table tennis — singles**, **Table tennis — doubles**, **Padel —
-   Americano**. *(Card game is greyed out with "cards don't have scores — they need their own board".)*
-4. *(Optional)* **Advanced** → change the padel round to 32 points, or min-games to 8.
-5. **Create.**
-
-### Flow B — Log a table tennis singles game (the 10-second path)
-
-1. Tap **Log game**. The sheet opens on your last-used type — **Table tennis — singles**.
-2. Tap the two players. *(Exactly 2 active → pre-selected.)*
-3. Type `11` and `7`. The winner highlights automatically — **you never separately declare a
-   winner**, it's derived from the score.
-4. Tap **Simpan** → the **PECUNDANG** stamp fires for the loser, with a 4-second undo.
-
-### Flow C — Log a padel Americano round
-
-1. Tap **Log game** → switch type to **Padel — Americano**.
-2. Tap the 4 players who were on court. Anyone sitting out simply isn't selected — **they get no
-   game**.
-3. Tap **Split** — deal into **Side A** / **Side B**; tap a name to move it. Header: `A: 2 · B: 2`.
-4. **Round length** shows as an editable number field, pre-filled `21`. Leave it, or tap it and type
-   `16` if you played a short round — the validator follows whatever is in that field, and the value
-   is snapshotted onto this game only.
-5. Type the round score, e.g. `13` – `8`. A live hint reads **`21 / 21 points ✓`** as you type, so a
-   miscount is caught before you save.
-6. **Simpan.** Both A players get `+13 for / +8 against`; both B players the mirror. **Individual
-   credit, Americano-style.**
-
-### Flow D — Log a card game (unchanged, now any size)
-
-1. Tap **Log game** on the card board.
-2. **Who played?** tap 3–8 participants. *(Exactly 4 active → pre-selected — today's flow preserved.)*
-3. **Who lost?** type `<name> pecundang`, or tap the loser's tile.
-4. **Simpan.**
-
-### Flow E — Fix a mistake
-
-1. Unlock → **Recent games**.
-2. Rows are type-labelled: `🏓 Levi 11 – 7 Rafi` · `🎾 A: Levi·Rafi 15 – 9 Nadhif·Sebas`.
-3. **Edit** to correct a score or roster; **Delete** to remove it (confirm). Standings recompute
-   immediately. Edits re-validate against **that game's snapshotted rules**, not today's defaults.
-
----
-
-## 11. Americano capability benchmark — what "partner mixing" costs
-
-Levi asked what capability we'd need for real Americano play, including partner mixing. Here is the
-benchmark against the dedicated apps, and the maths that decides it.
-
-### 11.1 What the dedicated apps ship
-
-| Capability | Americano apps | LOTD today | LOTD v4 as specced |
-|---|---|---|---|
-| Auto partner rotation (everyone partners everyone) | ✅ core | ❌ | ❌ → **P1 as a suggestion** |
-| Full schedule generated upfront | ✅ | ❌ | ❌ |
-| Multi-court allocation | ✅ | ❌ | ❌ |
-| Bye / sit-out management | ✅ "intelligent" | n/a | ✅ *(just don't select them)* |
-| Individual points from a team score | ✅ | ❌ | ✅ |
-| Live standings during the night | ✅ | ✅ | ✅ |
-| Mexicano re-pairing by live rank | ✅ | ❌ | ❌ |
-| **History that survives the night** | ❌ *mostly per-event* | ✅ | ✅ |
-| **Multiple sports on one standing** | ❌ | ❌ | ✅ |
-
-> **The strategic read: those apps are *event* tools; LOTD is a *history* tool.** They organise one
-> evening then forget it. LOTD remembers who has been losing since March. Copying their whole feature
-> set would trade our only real advantage for a commodity one.
-
-### 11.2 The algorithm, if we built it
-
-Standard **circle method**: fix one player, rotate the rest each round. With 8 players it yields 7
-rounds in which every possible pairing occurs exactly once. Larger or odd groups need bye rotation
-and the guarantee weakens to "maximise variety, never repeat until forced".
-
-### 11.3 The maths for *your* group — this is the deciding factor
-
-Your active roster is **7 players**, on **1 court** (4 on, 3 off):
-
-| | |
-|---|---|
-| Distinct partnerships to cover | `C(7,2)` = **21** |
-| Partnerships created per round | 2 *(one per side)* |
-| Rounds for a complete Americano | `⌈21 / 2⌉` = **11** |
-| At ~12 min/round | **≈ 2 h 15 m of play**, with 3 people idle every round |
-
-**A complete Americano is not achievable on a normal night with 7 players and one court.** Any
-schedule generated upfront would be abandoned halfway through — and a half-abandoned schedule is
-*worse than none*, because it also blocks the ad-hoc pairing people actually fall back to.
-
-This is the empirical reason to reject Tier 2 below, not a taste preference.
-
-### 11.4 The three tiers of partner mixing
-
-| Tier | What it does | What it needs | Effort | Verdict |
-|---|---|---|---|---|
-| **0 — Just record** | You pair socially; the app logs | nothing beyond v4 | — | Current plan |
-| **1 — Suggest the next pair** | "Levi & Sebas haven't partnered yet" | a partnership-count view + greedy least-paired pick | **small** | ✅ **Recommended (P1)** |
-| **2 — Full schedule** | Generate every round upfront | locked roster, sessions, schedule storage, bye rotation, court allocation | large | ❌ §11.3 |
-| **3 — Mexicano** | Re-pair each round by live standings | Tier 2 + mid-session standings + re-pair logic | large | ❌ |
-
-### 11.5 Recommendation — Tier 1, and the bonus it unlocks
-
-Tier 1 gives ~80% of the "everyone plays with everyone" benefit for ~10% of the cost, and it
-**degrades gracefully**: people arriving late or leaving early can't break a suggestion the way they
-break a schedule. It needs one derived view:
+## 6. Data model
 
 ```sql
--- how many times each pair has been on the SAME side
-v_partnerships(leaderboard_id, player_a, player_b, times_partnered, times_opposed)
-```
+-- NOTHING changes on: leaderboards, players, games (cards), v_standings-for-cards.
 
-From that, "suggest" is a greedy pick of the four selected players' least-used split. No scheduling,
-no session lock, no courts.
-
-**The bonus:** that same view is a roasting goldmine, and roasting is the product —
-*"Levi and Nadhif have never won a single round together"*, *"you always lose when you partner
-Sebas"*. Tier 2 gives you logistics; Tier 1 gives you logistics **and** material. That asymmetry is
-why it's the recommendation.
-
-**Sources:** [Padel Americano Generator](https://padel-bracket.com/americano/) ·
-[Americano Padel App](https://americano-padel.app/en/) ·
-[Padeltify — tournament generator](https://www.padeltify.com/) ·
-[Padel-Americano tournament manager (GitHub)](https://github.com/ptzimmerman/Padel-Americano) ·
-[PlayRez — Americano generator](https://playrez.com/tools/padel-americano-generator) ·
-[dcode — round-robin pairing](https://www.dcode.fr/round-robin-pairing-tournament) ·
-[PadelMake — classic Americano](https://www.padelmake.com/padel-classic-americano)
-
----
-
-## 12. Requirements
-
-### P0 — cannot ship without
-
-| # | Requirement | Acceptance criteria |
-|---|---|---|
-| R1 | Game types as first-class, board enables 1..n within one family | Given TT-singles + TT-doubles + Padel enabled, when logging, then a type picker offers exactly those three |
-| R2 | Per-game rule snapshot (`scoring_rule`, `target`, `win_by_2`, `allow_draws`) | Changing the padel target to 32 leaves existing 21-point rounds valid and correctly scored |
-| R3 | Two scoring rules implemented: `first_to` and `total_points` | Every row of §8.1 and §8.2 is a unit test, **including §8.3: `11–10` passes as padel and fails as table tennis** |
-| R4 | Board creation captures §6.1 fields with presets | "Table tennis + Padel" ticked → family=points, metric=point_share, both types enabled |
-| R5 | Scoring family locks at first game; cards excluded from a sports board | Change attempt → `409`; card type greyed with an explanation, not hidden |
-| R6 | Singles and doubles on one board | A 1v1 and a 2v2 both appear in standings, both baseline 0.50 |
-| R7 | Winner derived from score, never asked separately | No "who won?" control exists in the points flow |
-| R8 | Individual credit from side result | Padel 15–9 → both winners `for=15/against=9`; both losers the mirror |
-| R9 | Point share ranking, total points secondary | Sorted share ascending (biggest loser first) |
-| R10 | Live total hint for `total_points` types | Typing 13 and 7 shows `20 / 21` in a warning colour; save disabled |
-| R10b | **Round length is an editable input**, defaulting to the type's target, snapshotted per game | Setting a round to 16 validates against 16 and leaves other rounds at 21 |
-| R11 | A player cannot appear twice in one game | `PRIMARY KEY (game_id, player_id)`; clear API error, not a 500 |
-| R11b | **Boards are isolated at the DB layer** — a game can only contain players from its own board | Composite FK (§13). Test: inserting a cross-board game **fails**, where today it silently succeeds and drops a player from the standings |
-| R12 | Rules enforced at the DB layer, not only the Edge Function | Deferred trigger rejects <2 sides, empty side, ≠1 loss in elimination, invalid score for the game's own rule |
-| R13 | Lossless migration of all v3 games | Post-migration gp/losses byte-identical to a pre-migration snapshot, asserted in CI |
-| R14 | Card flow stays 3 interactions | 4 active → pre-selected → confess → save |
-| R15 | Daily spotlight = most games lost today, across types | Tiebreak lowest share; ties render `A & B · tied` (v3 behaviour) |
-
-### P1 — fast follow
-
-| # | Requirement |
-|---|---|
-| R16 | **Per-sport breakdown** — filter the standing to one game type (settles "I'm only bad at padel") |
-| R16b | **Partner suggestion (Tier 1, §11.4)** — `v_partnerships` view + "suggest split" on the 4 selected players |
-| R16c | **Partnership stats** — "never won with X", most/least frequent partner (roasting material from the same view) |
-| R17 | Head-to-head records (`Levi beats Rafi 7–3`) — natural once singles exist |
-| R18 | Toggle standings between point share and Loss Index (data already supports it) |
-| R19 | Export includes types, sides, participants, scores, per-game rules; standings rebuildable from it alone |
-| R20 | Points-per-game and win/loss streak columns |
-| R21 | Sessions — pick the roster once, log many rounds fast |
-
-### P2 — design for, don't build
-
-| # | Requirement |
-|---|---|
-| R22 | Match-level record (best of 3/5) |
-| R23 | Free-for-all ranking (1..n) for board games |
-| R24 | Mexicano pairing suggestions |
-| R25 | Partner-effect stats ("who drags their partner down") |
-| R26 | Handicap scoring for mixed-ability play |
-
----
-
-## 13. Data model
-
-```sql
--- a board enables game types; family is derived and locked at first game
-alter table leaderboards
-  add column scoring_family    text not null default 'loss'
-      check (scoring_family in ('loss','points')),
-  add column ranking_metric    text not null default 'loss_index'
-      check (ranking_metric in ('loss_index','point_share','total_points')),
-  add column min_games_to_rank int not null default 5
-      check (min_games_to_rank between 1 and 50),
-  add column default_game_type text;
-
-create table game_types (
+create table sports_games (
   id             bigint generated always as identity primary key,
   leaderboard_id bigint not null references leaderboards(id) on delete cascade,
-  key            text not null,                      -- 'tt_singles' | 'padel_americano' | …
-  label          text not null,
-  family         text not null check (family in ('loss','points')),
-  scoring_rule   text not null check (scoring_rule in ('first_to','total_points','elimination')),
-  sides_min      smallint not null default 2,
-  sides_max      smallint not null default 2,
-  side_size_min  smallint not null default 1,
-  side_size_max  smallint not null default 2,
-  points_target  int check (points_target between 1 and 99),
-  win_by_2       boolean not null default false,
-  allow_draws    boolean not null default false,
-  unique (leaderboard_id, key)
+  sport          text   not null check (sport in ('tt_singles','tt_doubles','padel')),
+  game_date      date   not null default current_date,
+  a1  bigint not null references players(id) on delete restrict,
+  a2  bigint          references players(id) on delete restrict,   -- null = singles
+  b1  bigint not null references players(id) on delete restrict,
+  b2  bigint          references players(id) on delete restrict,
+  score_a int not null check (score_a >= 0),
+  score_b int not null check (score_b >= 0),
+  created_at timestamptz not null default now(),
+
+  -- no draws (TT wins by 2; padel total is odd)
+  constraint decisive check (score_a <> score_b),
+
+  -- singles ⇔ both partners null; doubles ⇔ both set
+  constraint side_shape check ((a2 is null) = (b2 is null)),
+  constraint shape_matches_sport check (
+    (sport = 'tt_singles' and a2 is null) or
+    (sport in ('tt_doubles','padel') and a2 is not null)
+  ),
+
+  -- all named players distinct (nulls ignored)
+  constraint distinct_players check (
+        a1 <> b1
+    and (a2 is null or (a2 <> a1 and a2 <> b1 and (b2 is null or a2 <> b2)))
+    and (b2 is null or (b2 <> a1 and b2 <> b1))
+  ),
+
+  -- score legal for the sport
+  constraint valid_score check (
+    case when sport = 'padel'
+         then score_a + score_b = 21
+         else (greatest(score_a,score_b) = 11 and least(score_a,score_b) <= 9)
+           or (greatest(score_a,score_b) > 11 and greatest(score_a,score_b) - least(score_a,score_b) = 2)
+    end
+  ),
+
+  constraint game_date_not_future check (game_date <= current_date + 1)
 );
 
-create table games (
-  id             bigint generated always as identity primary key,
-  leaderboard_id bigint not null references leaderboards(id) on delete cascade,
-  game_type_id   bigint not null references game_types(id) on delete restrict,
-  game_date      date not null default current_date,
-  -- rules SNAPSHOTTED at write time: history is immutable & self-describing (§5.2)
-  scoring_rule   text not null,
-  points_target  int,
-  win_by_2       boolean,
-  allow_draws    boolean,
-  created_at     timestamptz not null default now(),
-  check (game_date <= current_date + 1)
-);
-
-create table game_sides (
-  id             bigint generated always as identity primary key,
-  game_id        bigint not null references games(id) on delete cascade,
-  side_no        smallint not null check (side_no between 1 and 8),
-  outcome        text check (outcome in ('win','loss','draw')),
-  points_for     int check (points_for >= 0),
-  points_against int check (points_against >= 0),
-  unique (game_id, side_no)
-);
-
-create table game_participants (
-  game_id   bigint not null references games(id) on delete cascade,
-  side_id   bigint not null references game_sides(id) on delete cascade,
-  player_id bigint not null references players(id) on delete restrict,
-  primary key (game_id, player_id)      -- ← structural: one human, one slot, per game
-);
+create index sports_games_board_date_idx on sports_games (leaderboard_id, game_date);
+-- RLS + grants mirror the card tables: anon read-only; writes via the Edge Function only.
 ```
 
-**Migration from v3 (lossless, reversible, idempotent):**
-```
-create game_type(key='odd_one_out', family='loss', scoring_rule='elimination', sides 3..8, side_size 1..1)
-for each v3 game:
-  create game(that type, same date/leaderboard/created_at)
-  for i in 1..4:
-    side = create_side(side_no=i, outcome = (p_i == loser ? 'loss' : 'win'))
-    create_participant(side, p_i)
-```
-Then assert `SELECT name, gp, losses FROM v_standings` matches a pre-migration snapshot.
-**Ship the assertion as a test, not a manual check.**
+**Standings** become one view that unions per-player contributions from both tables:
 
-### Board isolation — verified, and one gap v4 must close
+- from `games` (cards): games played, losses, expected `+0.25` per game
+- from `sports_games`: games played, losses (on the lower-scoring side), `points_for`/`against`,
+  expected `+0.50` per game
 
-**Question asked:** can one standing ever affect another?
+then computes `loss_index`, `point_share`, and applies §4.3's ordering. A `category` filter
+(`all` / `cards` / `racquet`) is a `WHERE` on the same view — that is the entire cost of §11's
+"combined vs separate" knob.
 
-**Today: isolated by construction, with a latent hole.**
-- `players.leaderboard_id NOT NULL` + `unique(leaderboard_id, name)` → a player row belongs to
-  exactly one board. The same human on two boards is **two separate rows with different ids**, so
-  their table tennis record can never touch their card record.
-- `games.leaderboard_id NOT NULL`, and `v_standings` groups by `p.leaderboard_id`.
-
-**The hole (verified experimentally against real Postgres, 2026-07-21):** nothing at the DB level
-ties a game's *players* to the game's *leaderboard*. `p1..p4` are plain FKs to `players(id)`. A game
-was successfully inserted on board A containing a player from board B. Only the Edge Function's
-`"all 4 players must belong to this leaderboard"` check prevents it.
-
-**The failure mode is silent, which is what makes it dangerous.** Because `v_standings` joins on
-`g.leaderboard_id = p.leaderboard_id`, the foreign player is simply *skipped*:
-
-| board | player | gp | losses |
-|---|---|---|---|
-| IsoTest A | A1, A2, A3 | 1 | 0 |
-| IsoTest B | **B1** *(the game's loser!)* | **0** | **0** |
-
-A 4-player game counted for 3 people, and **the loser vanished entirely** — no error, no warning.
-
-**v4 closes it structurally** with a composite foreign key, so the database itself refuses:
-
-```sql
-alter table players add constraint players_id_board_uq unique (id, leaderboard_id);
-alter table games   add constraint games_id_board_uq   unique (id, leaderboard_id);
-
-create table game_participants (
-  game_id        bigint not null,
-  leaderboard_id bigint not null,        -- denormalised so BOTH fks must agree on it
-  side_id        bigint not null references game_sides(id) on delete cascade,
-  player_id      bigint not null,
-  primary key (game_id, player_id),
-  foreign key (game_id,   leaderboard_id) references games(id,   leaderboard_id) on delete cascade,
-  foreign key (player_id, leaderboard_id) references players(id, leaderboard_id) on delete restrict
-);
-```
-
-The shared `leaderboard_id` column forces both keys to agree, so a participant **must** come from the
-game's own board. Cross-board contamination becomes impossible rather than merely prevented.
-
-> This partly **repays** the integrity debt below: we lose the "exactly one loser" CHECK, but we gain
-> a structural guarantee we never had.
-
-### The integrity tradeoff — read before approving
-
-Today's "exactly 4 players, exactly 1 loser" is **structural** — the database physically cannot hold
-a malformed game. That's the best property of the current design.
-
-A flexible model **cannot** express "exactly one loser" as a column CHECK, because sides live in
-another table. We trade a structural guarantee for an enforced one.
-
-**Mitigation (all three required, non-negotiable):**
-1. `PRIMARY KEY (game_id, player_id)` — a human still can't appear twice, structurally.
-2. A **deferred DB trigger** validating sides/results/scores against the game's own snapshotted rule
-   at COMMIT — not just app code.
-3. Property tests generating malformed games, asserting the DB rejects every one.
-
-Ship app-level validation only and the standings will eventually be wrong. Decide knowingly.
+**Board isolation backstop:** ship the composite FK `unique (id, leaderboard_id)` on players +
+`(aN, leaderboard_id)` FKs on `sports_games` (and the same on the card `games` table) so a game can
+only ever contain players from its own board. Verified 2026-07-21 that today's schema lacks this; it
+is ~10 lines and belongs here.
 
 ---
 
-## 14. Edge cases & negative cases
+## 7. Step-by-step: how to use it
 
-### Multi-sport board
-| # | Case | Expected behaviour |
-|---|---|---|
-| EC-1 | Padel round `11–7` (a table tennis score) | Rejected: *"a padel round is 21 points total — 11–7 only adds to 18"* |
-| EC-2 | Table tennis game `15–9` (a padel score) | Rejected: at target 11, `15–9` has margin 6, not 2 |
-| EC-3 | Padel target changed 21 → 32 mid-history | Old rounds keep `points_target=21` and stay valid (§5.2) |
-| EC-4 | Game type deleted while games reference it | Blocked by `ON DELETE RESTRICT`; offer *disable* instead (hides from the picker, keeps history) |
-| EC-5 | Type disabled then re-enabled | History untouched throughout |
-| EC-6 | Board mixes TT (to 11) and padel (to 21) | **Allowed and comparable** — point share is length-independent (§7.1). The whole point |
-| EC-7 | Adding a *loss-family* type to a points board | Rejected — family lock (§7.4) |
-| EC-8 | Board enabled for padel only, user tries a singles game | Rejected: allowed types named in the error |
-| EC-9 | Same player in a TT game and a padel round on one day | Fine — both count; daily spotlight aggregates across types |
-| EC-9b | Game references a player from **another board** | **Rejected by composite FK** (§13). Today this silently succeeds and the foreign player is dropped from every standing — the bug v4 fixes |
-| EC-9c | Same human plays on the cards board and the sports board | Two independent player rows, two independent records. **By design** — no cross-board totals exist |
-| EC-9d | Renaming a person on one board | Does **not** rename them on another; the rows are unrelated |
-| EC-9e | Deleting a whole leaderboard | Cascades to its own players and games only; other boards untouched |
+### Log a table tennis singles game (the 10-second path)
+1. **Log game → Table tennis (singles)** *(remembers your last choice)*.
+2. Tap the two players.
+3. Type `11` and `7`. The lower score's player is the loser — highlighted automatically. No "who
+   won?" question.
+4. **Simpan** → PECUNDANG stamp on the loser, 4-second undo.
 
-### Table tennis scores (`first_to`)
-| # | Case | Expected behaviour |
-|---|---|---|
-| EC-10 | `11–10` | Rejected: *"at 10–10 you play on until someone leads by 2"* |
-| EC-11 | `11–11` | Rejected — never a final score |
-| EC-12 | `12–9` / `13–10` | Rejected — game already ended at 11–9 / 12–10 |
-| EC-13 | `12–11` | Rejected — margin must be exactly 2 |
-| EC-14 | `10–8` | Rejected — nobody reached 11 |
-| EC-15 | `15–13`, `23–21` | **Valid** — deuce can run long |
-| EC-16 | `9–11` (loser typed first) | Valid; winner derived from the larger number |
-| EC-17 | Equal scores | Rejected — TT has no draws |
-| EC-18 | Win-by-2 turned off | `w == target` exactly; `11–10` becomes legal. Snapshotted per game |
-| EC-19 | Target switched 11 → 21 | Old games keep 11; only new games validate against 21 |
+### Log a padel round
+1. **Log game → Padel.**
+2. Tap the 4 players on court (anyone else present just isn't selected → no game for them).
+3. **Split** into Side A / Side B (tap to move a name).
+4. Type `13` – `8`. A live hint reads **`21 / 21 ✓`**; a miscount is caught before saving.
+5. **Simpan** → both players on the `8` side stamped, each takes a loss.
 
-### Padel scores (`total_points`)
-| # | Case | Expected behaviour |
-|---|---|---|
-| EC-20 | `13–7` (sums to 20) | Rejected with the running total shown — *"20 / 21"* |
-| EC-21 | `14–8` (sums to 22) | Rejected — *"22 / 21"* |
-| EC-22 | **`11–10`** | **Valid** as padel (sums to 21) — and the *same score is invalid* as table tennis. See §8.3 |
-| EC-23 | `21–0` | Valid |
-| EC-24 | Any equal score at target 21 | **Arithmetically impossible** — odd total. The draw path never triggers on this board |
-| EC-25 | Target later changed to an even number (24) | Draws become reachable; `allow_draws` must then be honoured, so the code path still has to exist and be tested |
-| EC-25b | Round length overridden to 16 for one round | Valid; snapshotted to that game only. Point share is length-independent so it stays comparable (§7.1) |
-| EC-25c | Round length set to 0 or negative | Rejected (`between 1 and 99`) |
-| EC-25d | Round length edited *after* the game was saved | Re-validates the existing score against the new length; rejected if it no longer sums — never silently corrupts |
-| EC-25e | Partner suggestion when all pairs are equally used | Deterministic fallback (name order) so the same 4 players always get the same suggestion |
-| EC-25f | Partner suggestion with fewer than 4 selected | Button disabled — nothing to split |
+### Log a card game
+Unchanged. 4 players → confess `<name> pecundang` → save. Same 3 taps as today.
 
-### Sides & participants
-| # | Case | Expected behaviour |
+### Fix a mistake
+Unlock → **Recent games** (labelled `🏓 Levi 11–7 Rafi` · `🎾 A: Levi·Rafi 13–8 Nadhif·Sebas` ·
+`🃏 …`) → Edit / Delete. Standings recompute. Racquet edits re-run the score CHECK.
+
+---
+
+## 8. Requirements
+
+### P0
+| # | Requirement | Acceptance |
 |---|---|---|
-| EC-26 | Same player on both sides | Rejected — PK violation as *"a player can only be in a game once"* |
-| EC-27 | Same player twice on one side | Same as EC-26 |
-| EC-28 | 3 players on a side of a 2-per-side type | Rejected — side size capped by the type |
-| EC-29 | Singles logged when only doubles enabled | Rejected, allowed types named |
-| EC-30 | Fewer than 2 players / only 1 side | Rejected: *"a game needs at least 2 sides"* |
-| EC-31 | Empty side after an edit | Rejected; edits atomic — no partial save |
-| EC-32 | Uneven sides (2v1) where the type allows | Allowed with a UI note; baseline stays `1/sides` so size doesn't distort share |
-| EC-33 | Player not in this leaderboard | Rejected (v3 rule) |
-| EC-34 | Archived player added to a new game | Rejected (v3 rule) |
-| EC-35 | Archived player in a historic game | Kept and counted — their games happened |
-| EC-36 | Player deleted who has games | Archived, never hard-deleted (`RESTRICT`) |
-| EC-37 | Player renamed mid-history | Fine — id-based |
-| EC-38 | >24 participants or >8 sides | Rejected with the cap stated, not a crash |
-| EC-39 | Sitting out a padel round | Not selected → **no game, no loss, no points** |
+| R1 | `sports_games` table with all CHECKs of §6 | Every row of §5's tables is a DB-level test; malformed rows rejected by the DB, not just the app |
+| R2 | Cards untouched | Card table DDL, CHECKs, Edge Function card actions, and tap-count are byte-identical to v3 |
+| R3 | Log TT singles/doubles + padel via a new Edge Function action | A padel 13–8 stamps both losers; a TT 11–7 stamps one |
+| R4 | Loser derived from score; both doubles losers counted | `sports_games` never stores an explicit "winner"; the lower side loses |
+| R5 | Loss Index unifies cards + racquet | On a card-only board, `loss_index == loss_rate/0.25` (property test) |
+| R6 | Point share as tiebreak only | Two players tied on Loss Index order by point share; a card-only player sorts by the next key |
+| R7 | Daily loser = most games lost today across both tables | A day with a card loss and a padel loss counts both |
+| R8 | Composite FK board isolation | A cross-board racquet insert fails (today it silently succeeds) |
+| R9 | `11–10` valid as padel, invalid as TT | Single CHECK keyed on `sport`; both directions unit-tested |
+
+### P1
+| # | Requirement |
+|---|---|
+| R10 | Standing filter: All / Cards / Racquet (one `WHERE`) |
+| R11 | `v_partnerships` — who's partnered whom, win/loss together → "you've never won a round with Sebas" (roast material) |
+| R12 | Per-sport breakdown ("I'm only bad at padel") |
+| R13 | Head-to-head singles records (`Levi beats Rafi 7–3`) |
+| R14 | Export includes racquet games; standings rebuildable from export alone |
+
+### P2
+| # | Requirement |
+|---|---|
+| R15 | Variable card player-count (2–8) |
+| R16 | Partner suggestion (Tier 1, from `v_partnerships`) |
+| R17 | Configurable TT target (21) / padel total |
+
+---
+
+## 9. Edge cases
+
+### Scores
+| # | Case | Behaviour |
+|---|---|---|
+| EC-1 | TT `11–10` | Rejected — win by 2 |
+| EC-2 | TT `12–9` / `13–10` | Rejected — game already ended |
+| EC-3 | TT `15–13`, `23–21` | Valid — deuce |
+| EC-4 | Padel `13–7` (sums 20) | Rejected — live hint shows `20/21` |
+| EC-5 | Padel `11–10` | Valid — sums to 21 (contrast EC-1) |
+| EC-6 | Equal scores any sport | Rejected — `decisive` CHECK; racquet has no draws |
+| EC-7 | Score typed loser-first (`7–11`) | Fine — loser is the lower side regardless of column |
+| EC-8 | Absurd `99–97` (valid TT) | Accepted but UI flags "unusually long" — surface typos, don't police |
+
+### Sides & players
+| # | Case | Behaviour |
+|---|---|---|
+| EC-9 | Same player on both sides | Rejected — `distinct_players` CHECK |
+| EC-10 | Singles with a partner set, or doubles missing one | Rejected — `side_shape` / `shape_matches_sport` |
+| EC-11 | Player from another board | Rejected — composite FK (R8) |
+| EC-12 | Archived player in a new game | Rejected (mirror the card rule in the Edge Function) |
+| EC-13 | Archived player in a past game | Kept and counted |
+| EC-14 | Player deleted who has racquet games | Archived, never hard-deleted (FK `RESTRICT`) |
+| EC-15 | Same human plays cards and padel | One shared player row; both count toward one standing |
 
 ### Stats & ranking
-| # | Case | Expected behaviour |
+| # | Case | Behaviour |
 |---|---|---|
-| EC-40 | Player with 0 games | Unranked, share `null`, in the "not enough games" group |
-| EC-41 | Below min-games threshold | Provisional — listed, unranked (v3 behaviour) |
-| EC-42 | All games drawn | `decisive_games = 0` → Loss Index undefined → provisional. Never `0/0` or `NaN`. Point share still works (0.50) |
-| EC-43 | Everyone tied on the metric | Deterministic tiebreak: share asc → more games → fewer wins → name A→Z |
-| EC-44 | Plays only padel, another only TT | Comparable on share, but skills differ — **known limitation**; R16 per-sport breakdown is the mitigation |
-| EC-45 | Strong player dragged down by weak doubles partners | **Known limitation, accepted.** Americano's premise is it evens out; R16 resolves disputes |
-| EC-46 | Latecomer with 3 games vs regular with 30 | Fair on share; min-games threshold stops a 1-game fluke topping the board |
-| EC-47 | Metric switched share ↔ Loss Index | Allowed anytime — both derive from stored scores (§6.4). No migration |
-| EC-48 | One player wins everything | Share → 1.0, opponent → 0.0. No divide-by-zero (`for+against` > 0) |
-| EC-49 | A side scored 0 (`11–0`) | Valid; loser's contribution `0/11 = 0` |
+| EC-16 | Card-only player vs racquet player, tied on Loss Index | Card-only player has no point share → falls to games-played tiebreak |
+| EC-17 | Player with only draws | N/A for racquet (no draws); cards unchanged |
+| EC-18 | Player below the provisional threshold | Listed, unranked (v3 behaviour retained) |
+| EC-19 | Loss Index with 0 games | `null`, unranked, no divide-by-zero |
+| EC-20 | Doubles: one strong player, weak partner | Both take the loss — you lose as a pair. Known and accepted (per-sport + partnership views soften it) |
+| EC-21 | Someone plays only singles, another only doubles | Comparable on Loss Index (both 2-side); point share differs but is only a tiebreak |
 
-### Time, integrity, abuse
-| # | Case | Expected behaviour |
+### Integrity & time
+| # | Case | Behaviour |
 |---|---|---|
-| EC-50 | Game dated in the future | Rejected (v3 rule; client supplies local `today`) |
-| EC-51 | Backdated game | Allowed; lands on its own date for the daily spotlight |
-| EC-52 | Timezone rollover at midnight | Client's local date wins (v3 behaviour) |
-| EC-53 | Changing scoring family after games exist | `409` — export, delete, recreate |
-| EC-54 | Migration run twice | Idempotent; second run a no-op |
-| EC-55 | Migration loses/duplicates a game | Caught by the pre/post assertion in CI, not production |
-| EC-56 | Two people logging at once | Games are independent rows; no lost updates |
-| EC-57 | Editing a game after its type's defaults changed | Re-validates against the game's **snapshotted** rules, not today's |
-| EC-58 | Griefing via open writes | Unchanged risk from v3 but a **larger surface**. Rate limit stays; consider a games/day cap per IP |
-| EC-59 | Hand-crafted malformed request | Rejected by the trigger (why R12 exists) |
-| EC-60 | Very long names | Escaped on render (`esc()`), length-capped on write |
-| EC-61 | Export/import round-trip | Standings must rebuild from exported games alone — `export.test.mjs` contract extends to types, scores, and per-game rules |
+| EC-22 | Future-dated game | Rejected (client supplies local `today`) |
+| EC-23 | Backdated game | Allowed; lands on its own day |
+| EC-24 | Hand-crafted malformed racquet insert | Rejected by CHECKs — structural, not just app-level |
+| EC-25 | Two people logging at once | Independent rows; no lost updates |
+| EC-26 | Export/import round-trip | Standings rebuild from cards + racquet exports alone |
 
 ---
 
-## 15. Success metrics
+## 10. The one open decision
 
-**Leading (4 weeks)**
-- One combined board carrying **both** table tennis and padel games.
-- Median time to log a table tennis singles game **< 10 seconds**.
-- Zero standings-correctness bugs.
-- Invalid-score rejections occur (validation is live) but are **< 5%** of attempts (input isn't
-  fighting people).
+**Combined standing, or separate?** Both run on the exact same two tables; the only difference is
+whether the standings view unions cards + racquet or filters to one.
 
-**Lagging (a quarter)**
-- The group stops keeping parallel scoreboards elsewhere — just ask, n is small.
-- Card logging rate unchanged (no regression).
-- Both sports and both TT formats in regular use on one board.
+- **Recommended: combined, with an All / Cards / Racquet filter (R10).** One rivalry, one daily loser
+  across everything — which was the whole point — and the per-category view is a free `WHERE`.
 
-**Guardrail**
-- Card logging stays 3 taps. If it rises, we broke the thing that already works.
+Everything else in this PRD is decided. If you pick combined, there are no blocking questions left.
 
 ---
 
-## 16. Phasing
+## 11. Phasing
 
-| Phase | Scope | Why this order |
+| Phase | Scope | Risk |
 |---|---|---|
-| **v4.0** | Schema + game types + migration + card game at 2–8 players + Loss Index | Riskiest change (migration) lands alone, verifiable, old numbers provably intact |
-| **v4.1** | Board creation form + presets + **table tennis singles** (`first_to`) | The driving use case, smallest new UI |
-| **v4.2** | Doubles + **padel Americano** (`total_points`) + live total hint | Adds the second scoring rule on proven foundations |
-| **v4.3** | R16 per-sport breakdown, head-to-head, sessions | The features arguments will demand |
-| **v4.4** | P2, only if asked | — |
+| **v4.0** | `sports_games` table + CHECKs + composite-FK backstop; Loss Index in the standings view; **no card changes** | Low — additive; cards untouched |
+| **v4.1** | Log flow for TT singles + padel; combined standing with filter | Low |
+| **v4.2** | TT doubles; point-share tiebreak; recent-games edit for racquet | Low |
+| **v4.3** | `v_partnerships`, per-sport breakdown, head-to-head | Low |
 
-**Do not ship v4.0 and v4.1 together.** The migration deserves its own release.
+No phase migrates data. No phase touches the card write path. Any phase can ship alone.
 
 ---
 
-## 17. Risks
+## 12. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Migration corrupts historic standings | **High** | Pre/post assertion test; migration alone in 4.0; export a backup first |
-| Loss of structural "one loser" guarantee | **High** | Deferred trigger + property tests (R12) |
-| Two scoring rules = two chances to get validation wrong | **High** | §8 tables are the test suite; rule is snapshotted so a bug can't retroactively invalidate history |
-| Cross-sport comparison feels unfair | Medium | R16 per-sport breakdown; EC-44 documents the limitation honestly |
-| Score validation too strict to log a real game | Medium | Teaching errors; `win_by_2` and `allow_draws` are toggles; live total hint (R10) prevents most padel errors |
-| Card logging gets slower | Medium | R14 guardrail |
-| Feature bloat kills a deliberately tiny app | Medium | Non-goals §4; P2 is design-only |
-| Open-write griefing on a bigger surface | Low-Med | EC-58 |
+| Card standings regress | **Low** (was High) | Cards literally untouched; the only shared surface is a read-only view |
+| Lost structural guarantee | **None** (was High) | Racquet games are flat rows with CHECKs — same guarantee as cards. No trigger needed |
+| Migration corrupts history | **None** (was High) | There is no migration |
+| Loss Index confuses players | Medium | Show a plain sentence too: "Nadhif loses 1.4× more than chance"; keep raw L and GP visible |
+| Point-share variance | **Low** (was High) | It's a tiebreak, not the ranking — it can't invert the board |
+| Open-write griefing, bigger surface | Low-Med | Rate limit stays; consider a games/day cap |
+| Feature bloat | Medium | P2 is design-only; §2 non-goals hold the line |
 
 ---
 
-## 18. Open questions
+## 13. Open questions
 
-### 18.1 Resolved
+All prior blockers are resolved (loss-based ranking, cards untouched, doubles = both stamped, padel
+21, no schedule generation). Remaining, none blocking:
 
-| Decision | Answer | Consequence |
+| # | Question | Default |
 |---|---|---|
-| Sports on one board? | **Yes — TT + padel together** | Drove the whole game-type design (§5) |
-| TT singles or doubles? | **Both** | Side size 1–2 on one board |
-| Unit of record | **One game** | No match-level record (non-goal 4) |
-| Ranking metric | **Point share** | The reason one board is possible (§7.1) |
-| Pairings | **Just record** | No Americano/Mexicano generation (non-goal 1) |
-| Padel point total | **21** | Odd ⇒ draws impossible on this board (§2) |
-| Padel matches too? | **No — Americano only** | `Padel — match` type dropped |
-| "Cappuccino" | **Withdrawn — not a real format** | No action |
-
-### 18.2 Still open
-
-| # | Question | Owner | Blocking? |
-|---|---|---|---|
-| Q1 | Do you ever play table tennis to **21** as well as 11? Only sets a default; the target is per-type either way. | Levi | No |
-| Q2 | Should the daily spotlight be **most games lost** (recommended — keeps LOTD's identity) or **lowest share today**? | Levi | No — default set |
-| Q3 | Do you want the **per-sport breakdown** (R16) in the first padel release, or wait until someone argues "I'm only bad at padel"? | Levi | No |
-| Q4 | Cap on games/day per IP, given writes are open? | Levi | No |
+| Q1 | Combined vs separate standing (§10) | Combined + filter |
+| Q2 | Ever play TT to 21? | 11; target is per-sport if needed |
+| Q3 | Cap on games/day per IP? | None for now |
 
 ---
 
-## Appendix A — Worked examples for tests
+## Appendix A — worked examples (test vectors)
 
-**A1. Table tennis singles** — Levi 11 – 7 Rafi
-- Levi: `for=11, against=7`, share `0.611`, win
-- Rafi: `for=7, against=11`, share `0.389`, loss
+**A1. TT singles** — Levi 11 – 7 Rafi → Rafi loses (lower). Levi `for=11/against=7`, share `0.611`.
 
-**A2. Table tennis doubles (individual credit)** — A(Levi, Rafi) 11 – 9 B(Nadhif, Sebas)
-- Levi **and** Rafi: `for=11, against=9`, share `0.550`
-- Nadhif **and** Sebas: `for=9, against=11`, share `0.450`
-- Both members of a side get the *identical* line — the Americano rule.
+**A2. TT doubles** — A(Levi,Rafi) 11 – 9 B(Nadhif,Sebas) → **both** Nadhif & Sebas lose; each
+`for=9/against=11`, share `0.450`. Levi & Rafi `0.550`, no loss.
 
-**A3. Deuce** — `15–13` valid (margin exactly 2, above target). Shares `0.536` / `0.464`.
+**A3. Padel** — A(Levi,Rafi) 13 – 8 B(Nadhif,Sebas), target 21 → both of B lose; share `8/21=0.381`.
+Anyone sitting out: nothing recorded.
 
-**A4. Padel Americano** — A(Levi, Rafi) 13 – 8 B(Nadhif, Sebas), target 21
-- Levi and Rafi: `for=13, against=8`, share `0.619`
-- Nadhif and Sebas: `for=8, against=13`, share `0.381`
-- Anyone sitting out: **nothing recorded**
+**A4. `11–10` two ways** — as padel: valid (sums 21), the `10` side loses. As TT: rejected (margin 1).
+Same numbers, opposite outcomes — the load-bearing unit test.
 
-**A5. The same score, two verdicts** (the §8.3 case — make this an explicit test)
-`11–10` submitted as **Padel Americano** → ✅ valid (`11+10 = 21`).
-`11–10` submitted as **Table tennis** → ❌ rejected (margin 1, needs 2).
-One board, one evening, opposite results. If a refactor ever makes these agree, the rule snapshot has
-been broken.
+**A5. Loss Index across game types** — Levi: 20 card games (lost 6) + 10 padel rounds (lost 4).
+Expected = 20(0.25) + 10(0.50) = 10. Actual = 10. `loss_index = 1.00` — dead average across both.
 
-**A6. Mixed sports on one board — why share beats total points**
-Levi plays one TT game (`11–4`) and one padel round (`13–8`).
-- Total points = 24 — meaningless, because the padel round is inherently worth more.
-- Share = `24 / (24 + 12) = 0.667` — comparable to anyone else's, regardless of sport.
+**A6. Migration safety (there is no migration, but the metric must still line up)** — a card-only
+player, 20 games, 8 losses → `loss_rate 0.40`; expected `5`; `index = 1.60 = 0.40/0.25`. ✓ The card
+standing's meaning is preserved exactly.
 
-**A7. Pure 4-player card board (migration safety)**
-20 games, 8 losses → loss_rate 0.40; expected = 20 × 0.25 = 5; index = 8/5 = **1.60**.
-Check: `0.40 / 0.25 = 1.60` ✓ — a rescaling, not a new judgement.
-
-**A8. Mixed-format loss board**
-| Player | Games | Losses | Expected | Index |
-|---|---|---|---|---|
-| Nadhif | 4× 4-player, 2× 1v1 | 3 | 4(0.25) + 2(0.5) = 2.0 | **1.50** |
-| Levi | 4× 4-player, 2× 1v1 | 1 | 2.0 | **0.50** |
-
-Identical schedules, so the comparison is fair — the entire point of the index.
+**A7. Tiebreak** — Nadhif and Sebas both at Loss Index `1.30`. Nadhif point share `0.42`, Sebas
+`0.48` → Nadhif ranks as the bigger loser (won a smaller share). A card-only player tied with them,
+having no point share, is ordered by games played instead.
