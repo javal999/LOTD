@@ -5,7 +5,8 @@
 // ponytail: stub first so the tests go red before the real logic lands.
 
 export const MIN_GAMES_FOR_RATE = 5;   // below this a player is "provisional" (PRD 7.5)
-export const LUCK_BASELINE = 0.25;     // 4 players, 1 loser → 25% by chance (PRD §2)
+export const LUCK_BASELINE = 0.25;     // cards: 4 players, 1 loser → 25% by chance (PRD §2)
+export const LUCK_BASELINE_SPORT = 0.5; // racquet: 2 sides → 50% by chance (PRD v4 §4.2)
 
 // This is a *loser* board: rank 1 is the biggest loser, so the table agrees with the
 // spotlight above it. (PRD v3 specified lowest-first; Levi reversed it 2026-07-15 so the
@@ -15,8 +16,9 @@ export const MODES = {
   HIGHEST_LOSS_RATE: 'highest_loss_rate',
 };
 
-// Derive the display stats a v_standings row implies.
-function decorate(row) {
+// Derive the display stats a standings row implies. `luckBaseline` is the by-chance loss rate for
+// the game type (cards 0.25, racquet 0.5), so "beats luck" means the same thing in every format.
+function decorate(row, luckBaseline = LUCK_BASELINE) {
   const { player_id, name, gp, losses, archived } = row;
   const loss_rate = gp > 0 ? losses / gp : null;   // null, not 0 — guards divide-by-zero
   return {
@@ -28,7 +30,7 @@ function decorate(row) {
     games_not_lost: gp - losses,
     loss_rate,
     provisional: gp < MIN_GAMES_FOR_RATE,          // too small a sample to rank on rate
-    beats_luck: loss_rate !== null && loss_rate < LUCK_BASELINE, // strictly under 25%
+    beats_luck: loss_rate !== null && loss_rate < luckBaseline, // strictly under the chance rate
   };
 }
 
@@ -51,8 +53,8 @@ function byHighestLossRate(a, b) {
 // most_not_lost ranks anyone who has played; lowest_loss_rate ranks only non-provisional
 // players (a 2-game run shouldn't crown or shame anyone). Archived players still count —
 // their games happened — and carry the flag through for the UI to mark.
-export function computeStandings(rows, mode) {
-  const all = rows.map(decorate);
+export function computeStandings(rows, mode, luckBaseline = LUCK_BASELINE) {
+  const all = rows.map((r) => decorate(r, luckBaseline));
   const isEligible = mode === MODES.HIGHEST_LOSS_RATE
     ? (p) => p.gp >= MIN_GAMES_FOR_RATE
     : (p) => p.gp >= 1;
@@ -67,6 +69,25 @@ const alpha = (a, b) => a.localeCompare(b);
 // rows -> array of name(s) with the most losses overall ([] if no games).
 // Every game has exactly one loser, so max losses === 0 means nothing has been logged.
 export function biggestLoserAllTime(rows) {
+  const max = rows.reduce((m, r) => Math.max(m, r.losses ?? 0), 0);
+  if (max <= 0) return [];
+  return rows.filter((r) => r.losses === max).map((r) => r.name).sort(alpha);
+}
+
+// v_sport_standings rows for ONE sport { player_id, name, archived, games, losses } ->
+// { ranked, unranked }, biggest loser first, on the 2-side (50%) luck baseline. A racquet game
+// has exactly 2 sides, so "beats luck" is under 50%. Reuses the card ranking, just re-based.
+export function computeSportStandings(rows) {
+  const mapped = rows.map((r) => ({
+    player_id: r.player_id, name: r.name, archived: r.archived,
+    gp: r.games, losses: r.losses,
+  }));
+  return computeStandings(mapped, MODES.HIGHEST_LOSS_RATE, LUCK_BASELINE_SPORT);
+}
+
+// v_daily_losses rows for ONE date { name, losses } -> the name(s) with the most losses that day,
+// across every game type ([] if none). This is the combined "Loser of the Day".
+export function biggestLoserToday(rows) {
   const max = rows.reduce((m, r) => Math.max(m, r.losses ?? 0), 0);
   if (max <= 0) return [];
   return rows.filter((r) => r.losses === max).map((r) => r.name).sort(alpha);

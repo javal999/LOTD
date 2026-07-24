@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeStandings, biggestLoserAllTime, biggestLoserForDate, losingStreak, MODES,
+  computeSportStandings, biggestLoserToday,
 } from './ranking.mjs';
 
 // Hand-computed from PRD v3 Appendix A + BUILD-PLAN E2 vectors. Expected values come
@@ -192,4 +193,56 @@ test('losingStreak: skips games the player did not play', () => {
 test('losingStreak: 0 when the newest game they played was not a loss (or no games)', () => {
   assert.equal(losingStreak(STREAK_GAMES, 2), 0); // P2's newest game was a win
   assert.equal(losingStreak([], 1), 0);
+});
+
+// ---------- computeSportStandings (racquet, 50% luck baseline) ----------
+
+const SPORT_ROWS = [
+  { player_id: 1, name: 'Ana',  archived: false, games: 10, losses: 7 }, // 70%
+  { player_id: 2, name: 'Budi', archived: false, games: 10, losses: 5 }, // 50% — exactly chance
+  { player_id: 3, name: 'Cici', archived: false, games: 10, losses: 4 }, // 40% — beats luck
+  { player_id: 4, name: 'Deni', archived: false, games: 2,  losses: 2 }, // provisional (gp<5)
+];
+
+test('computeSportStandings: biggest loss rate first, 2-game player is provisional', () => {
+  const { ranked, unranked } = computeSportStandings(SPORT_ROWS);
+  assert.deepEqual(ranked.map((p) => p.name), ['Ana', 'Budi', 'Cici']);
+  assert.deepEqual(ranked.map((p) => p.rank), [1, 2, 3]);
+  assert.deepEqual(unranked.map((p) => p.name), ['Deni']);
+});
+
+test('computeSportStandings: beats_luck uses the 50% baseline, not 25%', () => {
+  const { ranked } = computeSportStandings(SPORT_ROWS);
+  const byName = Object.fromEntries(ranked.map((p) => [p.name, p]));
+  assert.equal(byName['Cici'].beats_luck, true);   // 40% < 50%
+  assert.equal(byName['Budi'].beats_luck, false);  // 50% is not strictly under 50%
+  assert.equal(byName['Ana'].beats_luck, false);   // 70%
+  // A 40% card player would NOT beat luck (25% baseline) — proves the re-basing matters.
+  const asCard = computeStandings(
+    [{ player_id: 3, name: 'Cici', archived: false, gp: 10, losses: 4 }], MODES.HIGHEST_LOSS_RATE);
+  assert.equal(asCard.ranked[0].beats_luck, false); // 40% > 25%
+});
+
+test('computeStandings default baseline (cards) is unchanged by the new param', () => {
+  const rows = [{ name: 'X', gp: 10, losses: 2, archived: false }]; // 20% < 25%
+  assert.equal(computeStandings(rows, MODES.HIGHEST_LOSS_RATE).ranked[0].beats_luck, true);
+});
+
+// ---------- biggestLoserToday (combined daily, from v_daily_losses) ----------
+
+test('biggestLoserToday: most losses across game types wins', () => {
+  assert.deepEqual(biggestLoserToday([
+    { name: 'Ana', losses: 1 }, { name: 'Budi', losses: 3 }, { name: 'Cici', losses: 2 },
+  ]), ['Budi']);
+});
+
+test('biggestLoserToday: ties return every tied name, sorted', () => {
+  assert.deepEqual(biggestLoserToday([
+    { name: 'Zed', losses: 2 }, { name: 'Ana', losses: 2 }, { name: 'Cici', losses: 1 },
+  ]), ['Ana', 'Zed']);
+});
+
+test('biggestLoserToday: no losses -> empty', () => {
+  assert.deepEqual(biggestLoserToday([]), []);
+  assert.deepEqual(biggestLoserToday([{ name: 'A', losses: 0 }]), []);
 });
