@@ -432,3 +432,38 @@ Deno.test('sports games: table tennis + padel', async (t) => {
     assertEquals((await call('delete_leaderboard', { leaderboard_id: other })).status, 200);
   });
 });
+
+Deno.test('padel: adjustable points-per-round target', async (t) => {
+  let lb = 0;
+  const p: number[] = [];
+
+  await t.step('create padel board with target 16 -> stored', async () => {
+    const r = await call('create_leaderboard', { name: `Padel16 ${Date.now()}`, game_types: ['padel'], points_target: 16 });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.points_target, 16);
+    lb = r.body.data.id;
+    for (const name of ['W', 'X', 'Y', 'Z']) p.push((await call('add_player', { leaderboard_id: lb, name })).body.data.id);
+  });
+
+  await t.step('padel 10-6 (sums 16) -> ok, target snapshotted', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 10, score_b: 6,
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.points_target, 16);
+  });
+
+  await t.step('padel 13-8 (sums 21, wrong for a 16 board) -> 400 mentions 16', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 8,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('16'), r.body.error);
+  });
+
+  await t.step('cleanup', async () => {
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
+  });
+});

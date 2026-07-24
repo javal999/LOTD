@@ -70,13 +70,18 @@ function cleanGameTypes(v: unknown): string[] | null {
   const gt = [...new Set(v.filter((t) => GAME_TYPES.includes(t)))];
   return gt.length ? gt : null;
 }
+// A padel round length (6–99) or null to leave the column unset.
+function cleanPoints(v: unknown): number | null {
+  return Number.isInteger(v) && (v as number) >= 6 && (v as number) <= 99 ? (v as number) : null;
+}
 
 // Friendly score check mirroring the DB CHECK, so the user sees a sentence, not a constraint
 // name. The `valid_score` / `decisive` constraints are still the last line of defence.
-function scoreError(sport: string, a: number, b: number): string | null {
+// `padelTarget` is the board's round length (defaults to 21).
+function scoreError(sport: string, a: number, b: number, padelTarget = 21): string | null {
   if (a === b) return 'a game must have a winner — no draws';
   if (sport === 'padel') {
-    return a + b === 21 ? null : `a padel round must total 21 points — ${a}–${b} adds to ${a + b}`;
+    return a + b === padelTarget ? null : `a padel round must total ${padelTarget} points — ${a}–${b} adds to ${a + b}`;
   }
   if (sport === 'bd_singles' || sport === 'bd_doubles') {   // badminton: first to 21, win by 2, cap 30
     const hi = Math.max(a, b), lo = Math.min(a, b);
@@ -133,8 +138,11 @@ Deno.serve(async (req) => {
         const name = String(payload.name ?? '').trim();
         if (!name) return bad('a leaderboard name is required');
         const gt = cleanGameTypes(payload.game_types);
-        const { data, error } = await db.from('leaderboards')
-          .insert(gt ? { name, game_types: gt } : { name }).select().single();
+        const pt = cleanPoints(payload.points_target);
+        const row: Record<string, unknown> = { name };
+        if (gt) row.game_types = gt;
+        if (pt) row.points_target = pt;
+        const { data, error } = await db.from('leaderboards').insert(row).select().single();
         if (error) return bad(error.message);
         log(true, { leaderboard_id: data.id });
         return ok(data);
@@ -147,6 +155,8 @@ Deno.serve(async (req) => {
         const patch: Record<string, unknown> = { name };
         const gt = cleanGameTypes(payload.game_types);
         if (gt) patch.game_types = gt;
+        const pt = cleanPoints(payload.points_target);
+        if (pt) patch.points_target = pt;
         const { data, error } = await db.from('leaderboards').update(patch).eq('id', leaderboard_id).select().single();
         if (error) return bad(error.message);
         if (!data) return bad('leaderboard not found', 404);
@@ -292,7 +302,14 @@ Deno.serve(async (req) => {
         if (!named.every(isId)) return bad(singles ? 'two players are required' : 'four players are required');
         if (new Set(named).size !== named.length) return bad('a player can only be in a game once');
 
-        const serr = scoreError(sport, score_a, score_b);
+        // Padel rounds must total the board's configured target (default 21); it's snapshotted on
+        // the game so a later board change never invalidates old rounds.
+        let padelTarget: number | null = null;
+        if (sport === 'padel') {
+          const { data: board } = await db.from('leaderboards').select('points_target').eq('id', leaderboard_id).maybeSingle();
+          padelTarget = board?.points_target ?? 21;
+        }
+        const serr = scoreError(sport, score_a, score_b, padelTarget ?? 21);
         if (serr) return bad(serr);
 
         const { data: rows, error: e1 } = await db.from('players')
@@ -303,7 +320,7 @@ Deno.serve(async (req) => {
         if (rows.some((r) => r.archived)) return bad('an archived player cannot be added to a new game');
 
         const { data, error } = await db.from('sports_games')
-          .insert({ leaderboard_id, sport, game_date, a1: payload.a1, a2, b1: payload.b1, b2, score_a, score_b })
+          .insert({ leaderboard_id, sport, game_date, a1: payload.a1, a2, b1: payload.b1, b2, score_a, score_b, points_target: padelTarget })
           .select().single();
         if (error) return bad(error.message); // DB CHECKs / composite FK are the final backstop
         log(true, { leaderboard_id, sports_game_id: data.id });
@@ -328,10 +345,10 @@ Deno.serve(async (req) => {
         const { sports_game_id, score_a, score_b } = payload;
         if (!isId(sports_game_id)) return bad('sports_game_id is required');
         if (!isScore(score_a) || !isScore(score_b)) return bad('scores must be whole numbers');
-        const { data: g, error: e1 } = await db.from('sports_games').select('sport').eq('id', sports_game_id).maybeSingle();
+        const { data: g, error: e1 } = await db.from('sports_games').select('sport, points_target').eq('id', sports_game_id).maybeSingle();
         if (e1) return bad(e1.message);
         if (!g) return bad('game not found', 404);
-        const serr = scoreError(g.sport, score_a, score_b);
+        const serr = scoreError(g.sport, score_a, score_b, g.points_target ?? 21);  // padel: the game's own target
         if (serr) return bad(serr);
         const { error } = await db.from('sports_games').update({ score_a, score_b }).eq('id', sports_game_id);
         if (error) return bad(error.message);

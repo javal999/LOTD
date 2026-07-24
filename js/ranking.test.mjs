@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeStandings, biggestLoserAllTime, biggestLoserForDate, losingStreak, MODES,
-  computeSportStandings, biggestLoserToday,
+  computeSportStandings, biggestLoserToday, computePadelStandings, fewestPointsPadelToday,
 } from './ranking.mjs';
 
 // Hand-computed from PRD v3 Appendix A + BUILD-PLAN E2 vectors. Expected values come
@@ -245,4 +245,47 @@ test('biggestLoserToday: ties return every tied name, sorted', () => {
 test('biggestLoserToday: no losses -> empty', () => {
   assert.deepEqual(biggestLoserToday([]), []);
   assert.deepEqual(biggestLoserToday([{ name: 'A', losses: 0 }]), []);
+});
+
+// ---------- computePadelStandings (fewest avg points = biggest loser) ----------
+
+const PADEL_ROWS = [
+  { player_id: 1, name: 'Ana',  archived: false, rounds: 6, points_for: 60, points_against: 66 }, // avg 10.0
+  { player_id: 2, name: 'Budi', archived: false, rounds: 6, points_for: 78, points_against: 48 }, // avg 13.0
+  { player_id: 3, name: 'Cici', archived: false, rounds: 6, points_for: 60, points_against: 60 }, // avg 10.0, better diff
+  { player_id: 4, name: 'Deni', archived: false, rounds: 2, points_for: 10, points_against: 22 }, // provisional
+];
+
+test('computePadelStandings: fewest average points first, tie broken by point difference', () => {
+  const { ranked, unranked } = computePadelStandings(PADEL_ROWS);
+  // Ana & Cici both avg 10.0; Ana's diff is -6 vs Cici's 0, so Ana is the bigger loser (rank 1).
+  assert.deepEqual(ranked.map((p) => p.name), ['Ana', 'Cici', 'Budi']);
+  assert.deepEqual(ranked.map((p) => p.rank), [1, 2, 3]);
+  assert.deepEqual(unranked.map((p) => p.name), ['Deni']); // 2 rounds < threshold
+});
+
+test('computePadelStandings: exposes avg + point_diff', () => {
+  const { ranked } = computePadelStandings(PADEL_ROWS);
+  const ana = ranked.find((p) => p.name === 'Ana');
+  assert.equal(ana.avg, 10);
+  assert.equal(ana.point_diff, -6);
+});
+
+// ---------- fewestPointsPadelToday ----------
+
+const PADEL_PLAYERS = [{ id: 1, name: 'Ana' }, { id: 2, name: 'Budi' }, { id: 3, name: 'Cici' }, { id: 4, name: 'Deni' }];
+const PADEL_GAMES = [
+  { sport: 'padel', game_date: '2026-07-24', a1: 1, a2: 2, b1: 3, b2: 4, score_a: 13, score_b: 8 }, // Ana,Budi +13; Cici,Deni +8
+  { sport: 'padel', game_date: '2026-07-24', a1: 1, a2: 3, b1: 2, b2: 4, score_a: 5,  score_b: 16 }, // Ana,Cici +5; Budi,Deni +16
+];
+
+test('fewestPointsPadelToday: fewest total padel points today', () => {
+  // totals: Ana 18, Budi 29, Cici 13, Deni 24 → Cici fewest
+  assert.deepEqual(fewestPointsPadelToday(PADEL_GAMES, PADEL_PLAYERS, '2026-07-24'), { names: ['Cici'], points: 13 });
+});
+
+test('fewestPointsPadelToday: only padel + only that date; empty otherwise', () => {
+  assert.deepEqual(fewestPointsPadelToday(PADEL_GAMES, PADEL_PLAYERS, '2099-01-01'), { names: [], points: 0 });
+  const tt = [{ sport: 'tt_singles', game_date: '2026-07-24', a1: 1, b1: 2, score_a: 11, score_b: 4 }];
+  assert.deepEqual(fewestPointsPadelToday(tt, PADEL_PLAYERS, '2026-07-24'), { names: [], points: 0 });
 });

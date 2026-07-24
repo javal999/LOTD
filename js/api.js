@@ -15,7 +15,7 @@ const mock = (() => {
   if (!USE_MOCK) return null;
   const ALL_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel'];
   const s = {
-    boards: [{ id: 1, name: 'Geng Kartu', game_types: ALL_TYPES }],
+    boards: [{ id: 1, name: 'Geng Kartu', game_types: ALL_TYPES, points_target: 21 }],
     players: [
       { id: 1, leaderboard_id: 1, name: 'Levi', archived: false },
       { id: 2, leaderboard_id: 1, name: 'Budi', archived: false },
@@ -77,15 +77,30 @@ const mock = (() => {
     for (const g of sportsOf(id)) if (g.game_date === date) for (const pid of losers(g)) m.set(pid, (m.get(pid) ?? 0) + 1);
     return [...m.entries()].map(([player_id, l]) => ({ player_id, name: player(player_id)?.name ?? '?', losses: l }));
   };
+  // Padel points per player (mirrors v_padel_standings): each side's score is its players' points_for.
+  const padelStandings = (id) => {
+    const acc = new Map();
+    for (const g of sportsOf(id)) {
+      if (g.sport !== 'padel') continue;
+      for (const [pid, pf, pa] of [[g.a1, g.score_a, g.score_b], [g.a2, g.score_a, g.score_b], [g.b1, g.score_b, g.score_a], [g.b2, g.score_b, g.score_a]]) {
+        if (pid == null) continue;
+        const row = acc.get(pid) ?? { player_id: pid, rounds: 0, points_for: 0, points_against: 0 };
+        row.rounds += 1; row.points_for += pf; row.points_against += pa;
+        acc.set(pid, row);
+      }
+    }
+    return [...acc.values()].map((r) => ({ ...r, name: player(r.player_id)?.name ?? '?', archived: player(r.player_id)?.archived ?? false }));
+  };
   const inAnyGame = (id) => s.games.some((g) => inGame(g, id)) || s.sportsGames.some((g) => sidePlayers(g).includes(id));
 
   return {
-    listLeaderboards: () => s.boards.map((b) => ({ id: b.id, name: b.name, game_types: b.game_types ?? ALL_TYPES })).sort((a, b) => a.name.localeCompare(b.name)),
+    listLeaderboards: () => s.boards.map((b) => ({ id: b.id, name: b.name, game_types: b.game_types ?? ALL_TYPES, points_target: b.points_target ?? null })).sort((a, b) => a.name.localeCompare(b.name)),
     loadBoard: (id) => {
       const byNewest = (a, b) => (a.game_date < b.game_date ? 1 : a.game_date > b.game_date ? -1 : (a.created_at < b.created_at ? 1 : -1));
       return {
         standings: standings(id),
         sportStandings: sportStandings(id),
+        padelStandings: padelStandings(id),
         games: gamesOf(id).slice().sort(byNewest),
         sportsGames: sportsOf(id).slice().sort(byNewest),
         players: s.players.filter((p) => p.leaderboard_id === id)
@@ -93,8 +108,8 @@ const mock = (() => {
         dailyLosses: dailyLosses(id, localToday()),
       };
     },
-    createLeaderboard: (name, game_types) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES) }; s.boards.push(b); return b; },
-    renameLeaderboard: (id, name, game_types) => { const b = board(id); if (b) { b.name = name; if (game_types?.length) b.game_types = game_types; } return b; },
+    createLeaderboard: (name, game_types, points_target) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES), points_target: points_target ?? null }; s.boards.push(b); return b; },
+    renameLeaderboard: (id, name, game_types, points_target) => { const b = board(id); if (b) { b.name = name; if (game_types?.length) b.game_types = game_types; if (points_target) b.points_target = points_target; } return b; },
     deleteLeaderboard: (id) => {
       s.boards = s.boards.filter((b) => b.id !== id);
       s.players = s.players.filter((p) => p.leaderboard_id !== id);
@@ -122,7 +137,8 @@ const mock = (() => {
     editLoser: (game_id, loser) => { const g = s.games.find((x) => x.id === game_id); if (g) g.loser = loser; return { game_id, loser }; },
     deleteGame: (game_id) => { s.games = s.games.filter((g) => g.id !== game_id); return { game_id }; },
     logSportsGame: ({ leaderboard_id, sport, game_date, a1, a2, b1, b2, score_a, score_b }) => {
-      const g = { id: s.seqSG++, leaderboard_id, sport, game_date, a1, a2: a2 ?? null, b1, b2: b2 ?? null, score_a, score_b, created_at: new Date().toISOString() };
+      const pt = sport === 'padel' ? (board(leaderboard_id)?.points_target ?? 21) : null;
+      const g = { id: s.seqSG++, leaderboard_id, sport, game_date, a1, a2: a2 ?? null, b1, b2: b2 ?? null, score_a, score_b, points_target: pt, created_at: new Date().toISOString() };
       s.sportsGames.push(g); return g;
     },
     undoLastSports: (id) => {
@@ -145,7 +161,7 @@ async function get(path) {
 // ---- reads ----
 
 export const listLeaderboards = () =>
-  USE_MOCK ? mock.listLeaderboards() : get('leaderboards?select=id,name,game_types&order=name');
+  USE_MOCK ? mock.listLeaderboards() : get('leaderboards?select=id,name,game_types,points_target&order=name');
 
 // Everything the UI needs for one leaderboard, in one round trip. Cards come from v_standings
 // (unchanged); racquet from v_sport_standings (cards filtered out — they're already covered);
@@ -154,15 +170,16 @@ export async function loadBoard(leaderboardId) {
   const id = Number(leaderboardId);
   if (USE_MOCK) return mock.loadBoard(id);
   const today = localToday();
-  const [standings, sportStandings, games, sportsGames, players, dailyLosses] = await Promise.all([
+  const [standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses] = await Promise.all([
     get(`v_standings?select=player_id,name,gp,losses,archived&leaderboard_id=eq.${id}&order=name`),
     get(`v_sport_standings?select=sport,player_id,name,games,losses,archived&leaderboard_id=eq.${id}&sport=neq.cards&order=name`),
+    get(`v_padel_standings?select=player_id,name,archived,rounds,points_for,points_against&leaderboard_id=eq.${id}&order=name`),
     get(`games?select=id,game_date,p1,p2,p3,p4,loser,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
-    get(`sports_games?select=id,game_date,sport,a1,a2,b1,b2,score_a,score_b,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
+    get(`sports_games?select=id,game_date,sport,a1,a2,b1,b2,score_a,score_b,points_target,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
     get(`players?select=id,name,archived&leaderboard_id=eq.${id}&order=name`),
     get(`v_daily_losses?select=player_id,name,losses&leaderboard_id=eq.${id}&game_date=eq.${today}`),
   ]);
-  return { standings, sportStandings, games, sportsGames, players, dailyLosses };
+  return { standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses };
 }
 
 // ---- admin session ----
@@ -189,10 +206,10 @@ async function call(action, payload = {}, passcode) {
   return out.data;
 }
 
-export const createLeaderboard = (name, game_types) =>
-  USE_MOCK ? mock.createLeaderboard(name, game_types) : call('create_leaderboard', { name, game_types });
-export const renameLeaderboard = (leaderboard_id, name, game_types) =>
-  USE_MOCK ? mock.renameLeaderboard(leaderboard_id, name, game_types) : call('rename_leaderboard', { leaderboard_id, name, game_types });
+export const createLeaderboard = (name, game_types, points_target) =>
+  USE_MOCK ? mock.createLeaderboard(name, game_types, points_target) : call('create_leaderboard', { name, game_types, points_target });
+export const renameLeaderboard = (leaderboard_id, name, game_types, points_target) =>
+  USE_MOCK ? mock.renameLeaderboard(leaderboard_id, name, game_types, points_target) : call('rename_leaderboard', { leaderboard_id, name, game_types, points_target });
 export const deleteLeaderboard = (leaderboard_id) =>
   USE_MOCK ? mock.deleteLeaderboard(leaderboard_id) : call('delete_leaderboard', { leaderboard_id });
 

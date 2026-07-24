@@ -1,7 +1,8 @@
 import * as api from './api.js';
 import { buildExport } from './export.mjs';
 import {
-  computeStandings, computeSportStandings, biggestLoserAllTime, biggestLoserToday, losingStreak,
+  computeStandings, computeSportStandings, computePadelStandings, biggestLoserAllTime,
+  biggestLoserToday, fewestPointsPadelToday, losingStreak,
   MODES, LUCK_BASELINE, LUCK_BASELINE_SPORT, MIN_GAMES_FOR_RATE,
 } from './ranking.mjs';
 
@@ -16,12 +17,13 @@ const SPORTS = {
 const SPORT_ORDER = ['tt_singles', 'tt_doubles', 'bd_singles', 'bd_doubles', 'padel'];
 
 // Client-side score check mirroring the server + DB. Returns null if valid, else a short reason.
-function sportScoreError(sport, a, b) {
+// `padelTarget` is this board's points-per-round (default 21); ignored for non-padel sports.
+function sportScoreError(sport, a, b, padelTarget = 21) {
   if (a === '' || b === '' || a == null || b == null) return 'enter both scores';
   a = Number(a); b = Number(b);
   if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return 'whole numbers only';
   if (a === b) return 'someone has to win';
-  if (sport === 'padel') return a + b === 21 ? null : `must total 21 (now ${a + b})`;
+  if (sport === 'padel') return a + b === padelTarget ? null : `must total ${padelTarget} (now ${a + b})`;
   if (sport === 'bd_singles' || sport === 'bd_doubles') {   // badminton: first to 21, win by 2, cap 30
     const hi = Math.max(a, b), lo = Math.min(a, b);
     if (hi === 21 && lo <= 19) return null;
@@ -65,6 +67,11 @@ const boardName = () => boards.find((b) => b.id === boardId)?.name ?? '';
 const boardTypes = () => boards.find((b) => b.id === boardId)?.game_types ?? ALL_GAME_TYPES;
 const hasType = (t) => boardTypes().includes(t);
 const hasAnyRacquet = () => SPORT_ORDER.some((s) => hasType(s));
+// This board's Americano points-per-round (default 21 if never set).
+const boardPoints = () => boards.find((b) => b.id === boardId)?.points_target ?? 21;
+// A padel-only board uses the Americano points leaderboard, not the loss-rate tables. A legacy
+// multi-type board (e.g. the mock demo) keeps the loss-rate tables for every sport it plays.
+const isPadelBoard = () => { const t = boardTypes(); return t.length === 1 && t[0] === 'padel'; };
 
 // Game-type picker shared by New + Edit board. Three user-facing choices; table tennis maps to both
 // singles and doubles. `selected` is the granular list. Read back with readGameTypes().
@@ -84,12 +91,31 @@ function readGameTypes(box) {
   const sel = box.querySelector('#gt input[name="gt"]:checked');
   return GT_GROUPS.find((g) => g.key === sel?.value)?.types ?? ['cards'];
 }
-// Highlight the chosen row. A radio always has exactly one selected, so Create stays enabled.
+// Points-per-round field, only meaningful for padel (Americano). Shown when padel is the choice.
+function pointsFieldHTML(points, selectedTypes) {
+  const show = selectedTypes.includes('padel');
+  return `<div class="pt-wrap" id="ptwrap"${show ? '' : ' hidden'}>
+    <p class="field-label">Points per round · Americano</p>
+    <input class="field" id="pt" type="number" inputmode="numeric" min="6" max="99" value="${points ?? 21}">
+    <p class="sheet-sub">Every round's two scores add up to this — e.g. 21. Set it once, per board.</p></div>`;
+}
+// The chosen points target, or null when the board isn't padel (so non-padel boards store no target).
+function readPoints(box) {
+  if (box.querySelector('#gt input[name="gt"]:checked')?.value !== 'padel') return null;
+  const v = Number(box.querySelector('#pt')?.value);
+  return Number.isInteger(v) && v >= 6 && v <= 99 ? v : 21;
+}
+// Highlight the chosen row and reveal the points field only for padel. A radio always has exactly
+// one selected, so Create stays enabled.
 function wireGamePicker(box, goBtn) {
-  box.querySelectorAll('#gt input[name="gt"]').forEach((r) => r.addEventListener('change', () => {
+  const ptwrap = box.querySelector('#ptwrap');
+  const sync = () => {
     box.querySelectorAll('.gt-opt').forEach((o) => o.classList.toggle('on', o.querySelector('input').checked));
+    if (ptwrap) ptwrap.hidden = box.querySelector('#gt input[name="gt"]:checked')?.value !== 'padel';
     goBtn.disabled = false;
-  }));
+  };
+  box.querySelectorAll('#gt input[name="gt"]').forEach((r) => r.addEventListener('change', sync));
+  sync();
 }
 
 const nameOf = (id) => data?.players.find((p) => p.id === id)?.name ?? '?';
@@ -159,6 +185,7 @@ function openNewBoard() {
     <p class="sheet-sub">Each leaderboard has its own players and games.</p>
     <input class="field" id="n" placeholder="e.g. Padel Jumat" autocomplete="off">
     ${gameTypePickerHTML(['cards'])}
+    ${pointsFieldHTML(21, ['cards'])}
     <p class="sheet-error" id="err"></p>
     <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
     <button class="btn-primary" id="go">Create</button></div></div>`);
@@ -170,7 +197,7 @@ function openNewBoard() {
     const types = readGameTypes(box);
     if (!types.length) return;
     const created = await attempt(box.querySelector('#err'), async () => {
-      const b = await api.createLeaderboard(input.value.trim(), types);
+      const b = await api.createLeaderboard(input.value.trim(), types, readPoints(box));
       localStorage.setItem(LAST_BOARD, String(b.id));
     });
     if (created) { close(); await refresh(); }
@@ -183,6 +210,7 @@ function openRenameBoard() {
     <p class="field-label">Name</p>
     <input class="field" id="n" value="${esc(boardName())}" autocomplete="off">
     ${gameTypePickerHTML(boardTypes())}
+    ${pointsFieldHTML(boardPoints(), boardTypes())}
     <p class="sheet-error" id="err"></p>
     <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
     <button class="btn-primary" id="go">Save</button></div></div>`);
@@ -193,7 +221,7 @@ function openRenameBoard() {
     if (!input.value.trim()) return input.focus();
     const types = readGameTypes(box);
     if (!types.length) return;
-    const okd = await attempt(box.querySelector('#err'), () => api.renameLeaderboard(boardId, input.value.trim(), types));
+    const okd = await attempt(box.querySelector('#err'), () => api.renameLeaderboard(boardId, input.value.trim(), types, readPoints(box)));
     if (okd) { close(); await refresh(); }
   });
   input.focus(); input.select();
@@ -389,6 +417,8 @@ function openLogSport() {
     return;
   }
   const today = api.localToday();
+  const padelTotal = boardPoints();                   // this board's Americano points-per-round
+  const totalFor = (s) => (s === 'padel' ? padelTotal : SPORTS[s].total);
   const sports = SPORT_ORDER.filter(hasType);         // only what this board plays
   const canPlay = (s) => act.length >= SPORTS[s].perSide * 2;
   let sport = (hasType(lastSport) && canPlay(lastSport)) ? lastSport
@@ -459,10 +489,11 @@ function openLogSport() {
   function sync() {
     const per = SPORTS[sport].perSide;
     const full = a.length === per && b.length === per;
-    const serr = full ? sportScoreError(sport, saEl.value, sbEl.value) : null;
-    if (SPORTS[sport].total != null && full && (saEl.value !== '' || sbEl.value !== '')) {
+    const serr = full ? sportScoreError(sport, saEl.value, sbEl.value, padelTotal) : null;
+    const total = totalFor(sport);
+    if (total != null && full && (saEl.value !== '' || sbEl.value !== '')) {
       const sum = (Number(saEl.value) || 0) + (Number(sbEl.value) || 0);
-      scorehint.textContent = `${sum} / ${SPORTS[sport].total}${serr && sum === SPORTS[sport].total ? ' · ' + serr : sum === SPORTS[sport].total ? ' ✓' : ''}`;
+      scorehint.textContent = `${sum} / ${total}${serr && sum === total ? ' · ' + serr : sum === total ? ' ✓' : ''}`;
     } else {
       scorehint.textContent = full ? (serr ?? 'looks good ✓') : '';
     }
@@ -585,7 +616,8 @@ function openGames() {
       const [gid, sport] = d.savescore.split(':');
       const wrap = t.closest('.score-row');
       const sa = wrap.querySelector('[data-sa]').value, sb = wrap.querySelector('[data-sb]').value;
-      const serr = sportScoreError(sport, sa, sb);
+      const g = (data?.sportsGames ?? []).find((x) => x.id === Number(gid));
+      const serr = sportScoreError(sport, sa, sb, g?.points_target ?? boardPoints());
       if (serr) { err.textContent = serr; return; }
       if (await attempt(err, () => api.editSportsScore(Number(gid), Number(sa), Number(sb)))) { editing = null; await refresh(); draw(); }
     }
@@ -748,7 +780,8 @@ function sportTablesHTML() {
   if (!all.length) return '';
   const bySport = {};
   for (const r of all) (bySport[r.sport] ??= []).push(r);
-  return SPORT_ORDER.filter((s) => hasType(s) && bySport[s]?.length).map((sport) => {
+  // Padel is never a loss-rate table — it has its own Americano points table (padelTableHTML).
+  return SPORT_ORDER.filter((s) => s !== 'padel' && hasType(s) && bySport[s]?.length).map((sport) => {
     const { ranked, unranked } = computeSportStandings(bySport[sport]);
     const meta = SPORTS[sport];
     const row = (p, isRanked) => {
@@ -773,6 +806,64 @@ function sportTablesHTML() {
       </table>
     </section>`;
   }).join('');
+}
+
+// Padel Americano spotlight: the biggest loser is whoever averages the FEWEST points per round
+// all-time, and today's loser is whoever scored the fewest padel points today. Points follow the
+// player, not the partnership — that's the whole point of Americano.
+function padelSpotlightHTML() {
+  const { ranked } = computePadelStandings(data?.padelStandings ?? []);
+  const worst = ranked[0];   // rank 1 = fewest average points = biggest loser
+  const today = fewestPointsPadelToday(data?.sportsGames ?? [], data?.players ?? [], api.localToday());
+  const anyPadel = (data?.sportsGames ?? []).some((g) => g.sport === 'padel');
+
+  const card = (cls, label, main, meta, empty) => `
+    <div class="spot ${cls}">
+      <p class="spot-label">${label}</p>
+      ${main ? `<p class="spot-name">${esc(main)}</p><p class="spot-meta">${meta}</p>`
+             : `<p class="spot-name none">${empty}</p>`}
+    </div>`;
+
+  return `<div class="spotlights">
+    ${card('crown', 'All-time biggest loser', worst?.name,
+      worst ? `${worst.avg.toFixed(1)} pts/round · avg` : '', 'Not enough rounds yet')}
+    ${card('', 'Today’s biggest loser', today.names.length ? joinNames(today.names) : '',
+      `${today.points} pts today${today.names.length > 1 ? ' · tied' : ''}`,
+      anyPadel ? 'No padel today' : 'No data yet')}
+  </div>`;
+}
+
+// The Americano points table: one row per player, ranked by fewest average points per round
+// (biggest loser on top), ties broken by point difference. Replaces the loss-rate table on a
+// padel-only board.
+function padelTableHTML() {
+  const rows = data?.padelStandings ?? [];
+  if (!rows.length) return `<div class="empty small"><h2>No rounds yet</h2>
+    <p>Log a padel round — the leaderboard ranks players by their average points.</p></div>`;
+  const { ranked, unranked } = computePadelStandings(rows);
+  const row = (p, isRanked) => {
+    const archived = p.archived ? ' <span class="pill-archived">archived</span>' : '';
+    const diff = p.point_diff > 0 ? `+${p.point_diff}` : `${p.point_diff}`;
+    const cls = isRanked && p.rank === 1 ? ' class="lead-loser"' : (isRanked ? '' : ' class="quiet-row"');
+    return `<tr${cls}><td class="rank">${isRanked ? p.rank : '<span class="muted">–</span>'}</td>
+      <td class="who">${esc(p.name)}${archived}</td>
+      <td class="num">${p.rounds}</td><td class="num">${p.points_for}</td>
+      <td class="num">${diff}</td><td class="num rate">${p.avg != null ? p.avg.toFixed(1) : '–'}</td></tr>`;
+  };
+  return `<section class="sport-block">
+    <h3 class="sport-head">${SPORTS.padel.icon} ${esc(SPORTS.padel.label)}</h3>
+    <table class="standings">
+      <thead><tr><th class="rank">#</th><th>Player</th><th class="num">R</th>
+        <th class="num">Pts</th><th class="num">+/−</th><th class="num">Avg</th></tr></thead>
+      <tbody>
+        ${ranked.map((p) => row(p, true)).join('')}
+        ${unranked.length ? `<tr class="group-row"><td colspan="6">Not enough rounds yet · needs ${MIN_GAMES_FOR_RATE}</td></tr>` : ''}
+        ${unranked.map((p) => row(p, false)).join('')}
+      </tbody>
+    </table>
+    <p class="legend"><b>Fewest average points is the biggest loser.</b> Every point you win counts
+    to you, whoever your partner is — Americano-style. Ties break on total point difference (+/−).</p>
+  </section>`;
 }
 
 function rowsHTML(list, ranked) {
@@ -861,6 +952,7 @@ function render() {
        <button class="mini-btn" id="b-rename">Edit</button>
        <button class="mini-btn danger" id="b-del">Delete</button>` : '';
 
+  const padelBoard = isPadelBoard();
   const { ranked, unranked } = computeStandings(data?.standings ?? [], mode);
   const noPlayers = (data?.players?.length ?? 0) === 0;
   const cardHasGames = (data?.games?.length ?? 0) > 0;
@@ -881,10 +973,11 @@ function render() {
       <button class="linkbtn" id="a-games"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent games</button>
       <button class="linkbtn" id="a-export"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>Export</button>
     </div>` : ''}
-    ${spotlightHTML()}
+    ${padelBoard ? padelSpotlightHTML() : spotlightHTML()}
     ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
       <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
-      : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}`}
+      : padelBoard ? padelTableHTML()
+      : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}${hasType('padel') ? padelTableHTML() : ''}`}
     ${!noPlayers && (cardBtn || sportBtn) ? `<div class="logbar-wrap">${cardBtn}${sportBtn}</div>` : ''}`;
 
   app.querySelectorAll('.sort button').forEach((b) =>

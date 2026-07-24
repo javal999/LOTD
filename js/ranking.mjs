@@ -93,6 +93,46 @@ export function biggestLoserToday(rows) {
   return rows.filter((r) => r.losses === max).map((r) => r.name).sort(alpha);
 }
 
+// Padel Americano leaderboard, LOTD-flavoured: rank by FEWEST average points per round (biggest
+// loser first). Tie-break: worst point difference, then more rounds, then name. rows come from
+// v_padel_standings { player_id, name, archived, rounds, points_for, points_against }. Provisional
+// below MIN_GAMES_FOR_RATE rounds (a couple of rounds shouldn't crown anyone).
+export function computePadelStandings(rows) {
+  const all = rows.map((r) => ({
+    ...r,
+    avg: r.rounds > 0 ? r.points_for / r.rounds : null,   // avg points per round; lower = worse
+    point_diff: r.points_for - r.points_against,          // total point difference; lower = worse
+    provisional: r.rounds < MIN_GAMES_FOR_RATE,
+  }));
+  const cmp = (a, b) =>
+    (a.avg - b.avg)                    // fewest average points first
+    || (a.point_diff - b.point_diff)  // then worst point difference (the "score" tie-break)
+    || (b.rounds - a.rounds)          // then more rounds played (more proof)
+    || a.name.localeCompare(b.name);
+  const eligible = (p) => p.rounds >= MIN_GAMES_FOR_RATE;
+  const ranked = all.filter(eligible).sort(cmp).map((p, i) => ({ ...p, rank: i + 1 }));
+  const unranked = all.filter((p) => !eligible(p));
+  return { ranked, unranked };
+}
+
+// sports_games rows + players + date -> { names, points } of the player(s) with the FEWEST padel
+// points that day (among those who actually played padel that day). The padel "Loser of the Day".
+export function fewestPointsPadelToday(sportsGames, players, dateStr) {
+  const nameById = new Map(players.map((p) => [p.id, p.name]));
+  const pts = new Map();
+  for (const g of sportsGames) {
+    if (g.sport !== 'padel' || g.game_date !== dateStr) continue;
+    for (const [id, f] of [[g.a1, g.score_a], [g.a2, g.score_a], [g.b1, g.score_b], [g.b2, g.score_b]]) {
+      if (id == null) continue;
+      pts.set(id, (pts.get(id) ?? 0) + f);
+    }
+  }
+  if (pts.size === 0) return { names: [], points: 0 };
+  const min = Math.min(...pts.values());
+  const names = [...pts.entries()].filter(([, v]) => v === min).map(([id]) => nameById.get(id) ?? '?').sort(alpha);
+  return { names, points: min };
+}
+
 // games (newest-first, as loadBoard returns them) + a player id -> the player's *current*
 // losing streak: how many of their most-recent consecutive games they lost. Games they
 // didn't play are skipped; the streak ends at the first game they played but didn't lose.
