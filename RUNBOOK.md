@@ -73,3 +73,18 @@ SUPABASE_URL="$API_URL" SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
 python3 -m http.server 8138         # open http://localhost:8138 — config.js auto-targets local
 ```
 Tests: `node --test js/*.test.mjs` and `deno test -A supabase/functions/admin/admin.test.ts`.
+
+## Ship v4 (racquet sports — table tennis + padel)
+Additive and backward-compatible: the card game is untouched, so each step is safe on its own and the
+live site keeps working between them. Do them in order.
+```bash
+# 1. Apply the new migrations (sports_games, standings views, board-isolation FKs, partnerships)
+supabase db push --project-ref ptpijvdsyrlpqwctkzbp        # applies 0003–0006
+# 2. Deploy the Edge Function (adds log_sports_game + undo/edit/delete; card actions unchanged)
+supabase functions deploy admin --project-ref ptpijvdsyrlpqwctkzbp --use-api
+# 3. Deploy the frontend (activates the Racquet button + sport standings)
+vercel deploy --prod --yes
+```
+Verify on the live site: the **🏓 🎾 Racquet** button appears, logging a table tennis game stamps the
+loser, and the sport standings show. `ADMIN_PASSCODE` is already set, so logging works immediately.
+Rollback: `git revert` the frontend commit + redeploy; the added tables/views are inert if unused.
