@@ -61,8 +61,8 @@ const isId = (n: unknown): n is number => Number.isInteger(n) && (n as number) >
 const isScore = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0;
 const utcToday = () => new Date().toISOString().slice(0, 10);
 
-const SPORTS = ['tt_singles', 'tt_doubles', 'padel'] as const;
-const GAME_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel'];
+const SPORTS = ['tt_singles', 'tt_doubles', 'padel', 'bd_singles', 'bd_doubles'] as const;
+const GAME_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel', 'bd_singles', 'bd_doubles'];
 
 // Keep only known game types (deduped). null => let the DB default (all) stand.
 function cleanGameTypes(v: unknown): string[] | null {
@@ -77,6 +77,15 @@ function scoreError(sport: string, a: number, b: number): string | null {
   if (a === b) return 'a game must have a winner — no draws';
   if (sport === 'padel') {
     return a + b === 21 ? null : `a padel round must total 21 points — ${a}–${b} adds to ${a + b}`;
+  }
+  if (sport === 'bd_singles' || sport === 'bd_doubles') {   // badminton: first to 21, win by 2, cap 30
+    const hi = Math.max(a, b), lo = Math.min(a, b);
+    if (hi === 21 && lo <= 19) return null;
+    if (hi > 21 && hi <= 30 && hi - lo === 2) return null;
+    if (hi === 30 && lo === 29) return null;
+    if (hi < 21) return 'someone has to reach 21';
+    if (hi > 30) return 'badminton caps at 30';
+    return `${a}–${b} isn't a valid badminton score — win by 2 (or 30–29 at the cap)`;
   }
   const hi = Math.max(a, b), lo = Math.min(a, b);      // table tennis: first to 11, win by 2
   if (hi === 11 && lo <= 9) return null;
@@ -273,7 +282,7 @@ Deno.serve(async (req) => {
         if (!isScore(score_a) || !isScore(score_b)) return bad('scores must be whole numbers');
 
         // Side shape: singles = one per side (a2/b2 absent); doubles/padel = two per side.
-        const singles = sport === 'tt_singles';
+        const singles = sport === 'tt_singles' || sport === 'bd_singles';
         const a2 = singles ? null : payload.a2;
         const b2 = singles ? null : payload.b2;
         if (singles && (payload.a2 != null || payload.b2 != null)) return bad('singles has one player per side');

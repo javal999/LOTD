@@ -340,6 +340,39 @@ Deno.test('sports games: table tennis + padel', async (t) => {
     assertEquals(r.status, 200);
   });
 
+  await t.step('log badminton 21-19 -> ok', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'bd_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 21, score_b: 19,
+    });
+    assertEquals(r.status, 200);
+  });
+
+  await t.step('badminton 21-20 rejected (win by 2)', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'bd_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 21, score_b: 20,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('2'), r.body.error);
+  });
+
+  await t.step('badminton 30-29 cap win -> ok', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'bd_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 30, score_b: 29,
+    });
+    assertEquals(r.status, 200);
+  });
+
+  await t.step('badminton 31-29 over the cap -> 400', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'bd_singles', game_date: TODAY, today: TODAY,
+      a1: p[0], b1: p[1], score_a: 31, score_b: 29,
+    });
+    assertEquals(r.status, 400);
+  });
+
   await t.step('future date -> 400', async () => {
     const r = await call('log_sports_game', {
       leaderboard_id: lb, sport: 'tt_singles', game_date: TOMORROW, today: TODAY,

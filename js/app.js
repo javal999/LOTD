@@ -9,9 +9,11 @@ import {
 const SPORTS = {
   tt_singles: { label: 'Table tennis · singles', icon: '🏓', perSide: 1, total: null },
   tt_doubles: { label: 'Table tennis · doubles', icon: '🏓', perSide: 2, total: null },
+  bd_singles: { label: 'Badminton · singles',    icon: '🏸', perSide: 1, total: null },
+  bd_doubles: { label: 'Badminton · doubles',    icon: '🏸', perSide: 2, total: null },
   padel:      { label: 'Padel · Americano',      icon: '🎾', perSide: 2, total: 21 },
 };
-const SPORT_ORDER = ['tt_singles', 'tt_doubles', 'padel'];
+const SPORT_ORDER = ['tt_singles', 'tt_doubles', 'bd_singles', 'bd_doubles', 'padel'];
 
 // Client-side score check mirroring the server + DB. Returns null if valid, else a short reason.
 function sportScoreError(sport, a, b) {
@@ -20,6 +22,15 @@ function sportScoreError(sport, a, b) {
   if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return 'whole numbers only';
   if (a === b) return 'someone has to win';
   if (sport === 'padel') return a + b === 21 ? null : `must total 21 (now ${a + b})`;
+  if (sport === 'bd_singles' || sport === 'bd_doubles') {   // badminton: first to 21, win by 2, cap 30
+    const hi = Math.max(a, b), lo = Math.min(a, b);
+    if (hi === 21 && lo <= 19) return null;
+    if (hi > 21 && hi <= 30 && hi - lo === 2) return null;
+    if (hi === 30 && lo === 29) return null;
+    if (hi < 21) return 'first to 21';
+    if (hi > 30) return 'caps at 30';
+    return 'win by 2 (or 30–29)';
+  }
   const hi = Math.max(a, b), lo = Math.min(a, b);   // table tennis: first to 11, win by 2
   if (hi === 11 && lo <= 9) return null;
   if (hi > 11 && hi - lo === 2) return null;
@@ -60,6 +71,7 @@ const hasAnyRacquet = () => SPORT_ORDER.some((s) => hasType(s));
 const GT_GROUPS = [
   { key: 'cards', label: '🃏 Card game', types: ['cards'] },
   { key: 'tt', label: '🏓 Table tennis', types: ['tt_singles', 'tt_doubles'] },
+  { key: 'badminton', label: '🏸 Badminton', types: ['bd_singles', 'bd_doubles'] },
   { key: 'padel', label: '🎾 Padel', types: ['padel'] },
 ];
 function gameTypePickerHTML(selected) {
@@ -423,7 +435,7 @@ function openLogSport() {
   const assigned = () => [...a, ...b];
 
   function drawTypes() {
-    const short = { tt_singles: 'Singles', tt_doubles: 'Doubles', padel: 'Padel' };
+    const short = { tt_singles: 'Singles', tt_doubles: 'Doubles', bd_singles: 'Singles', bd_doubles: 'Doubles', padel: 'Padel' };
     // Only this board's sports; hide the picker entirely when there's just one.
     typesEl.innerHTML = sports.length < 2 ? '' : sports.map((s) =>
       `<button class="ltype${s === sport ? ' on' : ''}" data-s="${s}"${canPlay(s) ? '' : ' disabled'}>${SPORTS[s].icon} ${short[s]}</button>`).join('');
@@ -858,8 +870,9 @@ function render() {
   const showCardTable = hasType('cards') && (cardHasGames || !hasAnyRacquet());
   const cardBtn = hasType('cards')
     ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : ''}>Log game</button>` : '';
+  const racquetSport = SPORT_ORDER.find(hasType);   // this board's racquet sport (single-type boards)
   const sportBtn = hasAnyRacquet()
-    ? `<button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>🏓 🎾 Racquet</button>` : '';
+    ? `<button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>${SPORTS[racquetSport]?.icon ?? '🏓'} Log game</button>` : '';
   document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log buttons
 
   app.innerHTML = `

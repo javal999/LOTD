@@ -63,6 +63,17 @@ begin
   perform pg_temp.expect('padel 13-7 sums 20',       false, format('%s(%s,''padel'',%s,%s,%s,%s,13,7)', ins, la, p1, p2, p3, p4));
   perform pg_temp.expect('padel 14-8 sums 22',       false, format('%s(%s,''padel'',%s,%s,%s,%s,14,8)', ins, la, p1, p2, p3, p4));
 
+  -- ── Badminton: first to 21, win by 2, capped at 30 ────────────────────
+  perform pg_temp.expect('bd 21-19 clean',           true,  format('%s(%s,''bd_singles'',%s,null,%s,null,21,19)', ins, la, p1, p2));
+  perform pg_temp.expect('bd 22-20 deuce',           true,  format('%s(%s,''bd_singles'',%s,null,%s,null,22,20)', ins, la, p1, p2));
+  perform pg_temp.expect('bd 30-28 deuce',           true,  format('%s(%s,''bd_singles'',%s,null,%s,null,30,28)', ins, la, p1, p2));
+  perform pg_temp.expect('bd 30-29 cap win',         true,  format('%s(%s,''bd_singles'',%s,null,%s,null,30,29)', ins, la, p1, p2));
+  perform pg_temp.expect('bd doubles 25-23',         true,  format('%s(%s,''bd_doubles'',%s,%s,%s,%s,25,23)', ins, la, p1, p2, p3, p4));
+  perform pg_temp.expect('bd 21-20 not win-by-2',    false, format('%s(%s,''bd_singles'',%s,null,%s,null,21,20)', ins, la, p1, p2));
+  perform pg_temp.expect('bd 31-29 over the cap',    false, format('%s(%s,''bd_singles'',%s,null,%s,null,31,29)', ins, la, p1, p2));
+  perform pg_temp.expect('bd 30-27 margin 3',        false, format('%s(%s,''bd_singles'',%s,null,%s,null,30,27)', ins, la, p1, p2));
+  perform pg_temp.expect('bd 20-18 nobody reached 21', false, format('%s(%s,''bd_singles'',%s,null,%s,null,20,18)', ins, la, p1, p2));
+
   -- ── Side shape ────────────────────────────────────────────────────────
   perform pg_temp.expect('tt_singles with a partner',false, format('%s(%s,''tt_singles'',%s,%s,%s,null,11,7)', ins, la, p1, p2, p3));
   perform pg_temp.expect('tt_doubles missing partner',false,format('%s(%s,''tt_doubles'',%s,null,%s,null,11,7)',ins, la, p1, p3));
