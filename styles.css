@@ -386,3 +386,60 @@ body.has-logbar .wrap { padding-bottom:96px; }
 }
 .gt-opt.on { background:var(--felt-tint); border-color:transparent; color:var(--felt); }
 .gt-opt input { width:20px; height:20px; accent-color:var(--felt); flex:none; }
+
+/* ---- Americano sessions (Phase B) ---- */
+/* secondary "Log round" button sitting beside the felt "Start Americano" primary */
+.logbar-wrap .logbar.ghost {
+  flex:0 0 auto; padding:0 16px; background:var(--surface); color:var(--ink);
+  border:1px solid var(--line); font-size:15px; font-weight:600;
+}
+
+/* courts / rounds inputs */
+.amer-opts { display:flex; gap:12px; margin:14px 0 4px; }
+.amer-opt { flex:1; display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-2); }
+.amer-opt .field { text-align:center; font-weight:700; font-size:19px; margin:0; }
+.amer-info { min-height:20px; margin-top:12px; font-weight:600; color:var(--felt); }
+
+/* resume card on the padel board */
+.amer-banner {
+  display:flex; flex-direction:column; gap:3px; width:100%; text-align:left; margin:2px 0 18px;
+  padding:14px 16px; border:1px solid var(--felt); border-radius:var(--radius-md);
+  background:var(--felt-tint); cursor:pointer; transition:transform .12s;
+}
+.amer-banner.complete { border-color:var(--line); background:var(--surface-2); }
+.amer-banner:active { transform:scale(.99); }
+.amer-b-title { font-family:var(--font-display); font-weight:600; font-size:16px; color:var(--ink); }
+.amer-b-sub { font-size:13px; font-weight:600; color:var(--ink-2); }
+
+/* the round-runner sheet */
+.runner-progress { font-size:13px; font-weight:700; color:var(--ink-2); margin-bottom:10px; }
+.runner-loser {
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; padding:12px 15px; margin-bottom:14px;
+  border-radius:var(--radius-md); background:var(--clay-tint);
+}
+.runner-loser .spot-label { color:var(--clay); flex-basis:100%; }
+.runner-loser b { font-family:var(--font-display); font-weight:600; font-size:22px; color:var(--clay); }
+.runner-loser em { font-style:normal; font-size:13px; font-weight:600; color:var(--ink-2); }
+.runner-standings { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-direction:column; gap:2px; }
+.runner-standings li { display:flex; align-items:center; gap:10px; padding:6px 4px; border-bottom:1px solid var(--line); font-size:14px; }
+.runner-standings li:last-child { border-bottom:0; }
+.rs-rank { width:20px; font-weight:700; color:var(--ink-2); }
+.rs-name { flex:1; font-weight:600; overflow-wrap:anywhere; }
+.rs-avg { font-weight:700; }
+.rs-diff { width:44px; text-align:right; font-size:12px; font-weight:600; color:var(--ink-2); }
+
+.runner-body { display:flex; flex-direction:column; gap:16px; margin-top:6px; }
+.rround h3 { font-family:var(--font-display); font-size:15px; font-weight:600; margin-bottom:8px; color:var(--ink-2); }
+.rmatch {
+  display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px;
+  padding:10px; border:1px solid var(--line); border-radius:var(--radius-md); background:var(--surface-2);
+}
+.rmatch.done { background:var(--felt-tint); border-color:transparent; }
+.rmatch .rlog { grid-column:1 / -1; justify-self:end; margin-top:2px; }
+.rteam { font-size:14px; font-weight:600; overflow-wrap:anywhere; }
+.rteam:last-of-type { text-align:right; }
+.rteam.won { color:var(--felt); }
+.rmatch .rscore { display:flex; align-items:center; gap:6px; justify-content:center; }
+.rmatch .rscore .field.score { width:52px; height:44px; font-size:20px; }
+.rmatch.done .rscore b { font-family:var(--font-display); font-size:20px; font-weight:600; }
+.rsit { margin-top:8px; font-size:12px; font-weight:600; color:var(--ink-2); }

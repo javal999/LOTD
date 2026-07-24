@@ -5,6 +5,7 @@ import {
   biggestLoserToday, fewestPointsPadelToday, losingStreak,
   MODES, LUCK_BASELINE, LUCK_BASELINE_SPORT, MIN_GAMES_FOR_RATE,
 } from './ranking.mjs';
+import { generateSchedule, suggestedRounds, matchesPerRound } from './americano.mjs';
 
 // Sport metadata: label, icon, players-per-side, and the round-length hint for padel.
 const SPORTS = {
@@ -539,6 +540,201 @@ function openLogSport() {
   drawTypes(); drawTeams(); sync();
 }
 
+// ---- Americano sessions (Phase B) ----
+// A session is one padel night: a fixed roster, court count, and round target. The pairing schedule
+// is a deterministic function of those three (americano.mjs), so the runner regenerates it on open —
+// nothing about the pairings is stored, only the inputs.
+
+const latestSession = () => (data?.padelSessions ?? [])[0];
+const sessionGames = (sid) => (data?.sportsGames ?? []).filter((g) => g.session_id === sid && g.sport === 'padel');
+
+// v_padel_standings-shaped rows built from raw padel games — for one session's live standings.
+function padelRowsFromGames(games) {
+  const acc = new Map();
+  for (const g of games) {
+    if (g.sport !== 'padel') continue;
+    for (const [pid, pf, pa] of [[g.a1, g.score_a, g.score_b], [g.a2, g.score_a, g.score_b], [g.b1, g.score_b, g.score_a], [g.b2, g.score_b, g.score_a]]) {
+      if (pid == null) continue;
+      const r = acc.get(pid) ?? { player_id: pid, name: nameOf(pid), archived: false, rounds: 0, points_for: 0, points_against: 0 };
+      r.rounds += 1; r.points_for += pf; r.points_against += pa;
+      acc.set(pid, r);
+    }
+  }
+  return [...acc.values()];
+}
+
+// Start Americano: pick who's here, how many courts, how many rounds; generate the night's pairings.
+// Roster is kept in name order so the schedule is stable across reloads.
+function openStartAmericano() {
+  const act = activePlayers();
+  const today = api.localToday();
+  ensureAudio();
+  if (act.length < 4) {
+    const box = el(`<div class="sheet"><h2>Start Americano</h2>
+      <p class="warn">An Americano needs at least 4 active players — add more first.</p>
+      <div class="sheet-actions"><button class="btn-ghost" data-close>Close</button></div></div>`);
+    openSheet(box);
+    return;
+  }
+  const chosen = new Set(act.map((p) => p.id));   // everyone in by default
+  let roundsEdited = false;
+
+  const box = el(`<div class="sheet sheet-log">
+    <h2 class="pec-title">Start Americano</h2>
+    <p class="pick-label">Siapa yang main? <span class="pick-count" id="rcount"></span></p>
+    <div class="chips chips-lg" id="roster"></div>
+    <div class="amer-opts">
+      <label class="amer-opt">Courts<input class="field" id="courts" type="number" inputmode="numeric" min="1" max="6" value="1"></label>
+      <label class="amer-opt">Rounds<input class="field" id="rounds" type="number" inputmode="numeric" min="1" max="60"></label>
+    </div>
+    <p class="sheet-sub amer-info" id="info"></p>
+    <p class="sheet-error" id="err"></p>
+    <div class="sheet-actions">
+      <button class="btn-ghost" data-close>Batal</button>
+      <button class="btn-primary" id="go">Generate schedule</button>
+    </div></div>`);
+  const close = openSheet(box);
+  const rosterEl = box.querySelector('#roster'), rcount = box.querySelector('#rcount');
+  const courtsEl = box.querySelector('#courts'), roundsEl = box.querySelector('#rounds');
+  const info = box.querySelector('#info'), err = box.querySelector('#err'), go = box.querySelector('#go');
+
+  const rosterIds = () => act.filter((p) => chosen.has(p.id)).map((p) => p.id);   // name order
+  const readCourts = () => Math.max(1, Math.min(6, Number(courtsEl.value) || 1));
+  const readRounds = (n, c) => Math.max(1, Math.min(60, Number(roundsEl.value) || suggestedRounds(n, c) || 1));
+
+  function sync() {
+    const n = rosterIds().length, c = readCourts();
+    const suggested = suggestedRounds(n, c);
+    if (!roundsEdited) roundsEl.value = suggested || '';
+    const r = readRounds(n, c);
+    const m = matchesPerRound(n, c), sit = m > 0 ? n - m * 4 : 0;
+    rcount.textContent = `${n} main`;
+    info.textContent = n < 4 ? 'Pick at least 4 players.'
+      : `${m} match${m === 1 ? '' : 'es'} a round · ${sit} sitting out each round · ${r} rounds`;
+    go.disabled = n < 4;
+  }
+  function drawRoster() {
+    rosterEl.innerHTML = act.map((p) =>
+      `<button class="chip${chosen.has(p.id) ? ' on' : ''}" data-id="${p.id}" aria-pressed="${chosen.has(p.id)}">${esc(p.name)}</button>`).join('');
+  }
+  rosterEl.addEventListener('click', (e) => {
+    const id = Number(e.target.closest('.chip')?.dataset.id); if (!id) return;
+    if (chosen.has(id)) chosen.delete(id); else chosen.add(id);
+    drawRoster(); sync();
+  });
+  courtsEl.addEventListener('input', sync);
+  roundsEl.addEventListener('input', () => { roundsEdited = true; sync(); });
+
+  go.addEventListener('click', async () => {
+    const roster = rosterIds();
+    if (roster.length < 4) return;
+    const c = readCourts(), r = readRounds(roster.length, c);
+    await attempt(err, async () => {
+      const sess = await api.createPadelSession({
+        leaderboard_id: boardId, game_date: today, roster, courts: c, rounds: r, secret: LOSER_WORD,
+      });
+      close(); await refresh();
+      openSessionRunner(sess);
+    });
+  });
+  drawRoster(); sync();
+}
+
+// The round-runner: shows the generated pairings round by round, logs each match's score into the
+// session, and keeps a live "tonight" leaderboard. You log the rounds you actually play — unfinished
+// rounds just stay blank (PRD v4 B1). Standings come from the logged games, never the schedule map.
+function openSessionRunner(session) {
+  const sched = generateSchedule(session.roster, session.courts, session.rounds);
+  const target = boardPoints();
+  const pairName = (ids) => ids.map(nameOf).map(esc).join(' · ');
+
+  const box = el(`<div class="sheet sheet-runner">
+    <h2 class="pec-title">Americano · ${esc(session.game_date)}</h2>
+    <div id="summary"></div>
+    <p class="sheet-error" id="err"></p>
+    <div class="runner-body" id="body"></div>
+    <div class="sheet-actions"><button class="btn-primary" data-close>Selesai</button></div>
+  </div>`);
+  const close = openSheet(box);
+  const summary = box.querySelector('#summary'), body = box.querySelector('#body'), err = box.querySelector('#err');
+
+  // Map logged session games onto schedule slots (by player composition, either orientation) so a
+  // played match shows its score with a ✓. An imperfect map can never move the numbers — those come
+  // straight from the games.
+  function mapGames(sgames) {
+    const used = new Set(), map = new Map();
+    const setOf = (arr) => new Set(arr.filter((x) => x != null));
+    const eq = (s1, s2) => s1.size === s2.size && [...s1].every((x) => s2.has(x));
+    sched.rounds.forEach((rnd, ri) => rnd.matches.forEach((mt, mi) => {
+      const aSet = new Set(mt.a), bSet = new Set(mt.b);
+      const g = sgames.find((x) => {
+        if (used.has(x.id)) return false;
+        const xa = setOf([x.a1, x.a2]), xb = setOf([x.b1, x.b2]);
+        return (eq(xa, aSet) && eq(xb, bSet)) || (eq(xa, bSet) && eq(xb, aSet));
+      });
+      if (g) { used.add(g.id); map.set(`${ri}:${mi}`, g); }
+    }));
+    return map;
+  }
+
+  function draw() {
+    const sgames = sessionGames(session.id);
+    const map = mapGames(sgames);
+    const total = sched.rounds.reduce((n, r) => n + r.matches.length, 0);
+    const { ranked } = computePadelStandings(padelRowsFromGames(sgames), 1);   // rank from round 1
+    const loser = ranked[0];
+
+    summary.innerHTML = `<p class="runner-progress">${map.size} / ${total} matches logged</p>
+      ${loser ? `<div class="runner-loser"><span class="spot-label">Pecundang malam ini</span>
+        <b>${esc(loser.name)}</b><em>${loser.avg.toFixed(1)} pts/round</em></div>` : ''}
+      ${ranked.length ? `<ol class="runner-standings">${ranked.map((p) =>
+        `<li><span class="rs-rank">${p.rank}</span><span class="rs-name">${esc(p.name)}</span>
+          <span class="rs-avg">${p.avg.toFixed(1)}</span><span class="rs-diff">${p.point_diff > 0 ? '+' : ''}${p.point_diff}</span></li>`).join('')}</ol>` : ''}`;
+
+    body.innerHTML = sched.rounds.map((rnd, ri) => {
+      const rows = rnd.matches.map((mt, mi) => {
+        const g = map.get(`${ri}:${mi}`);
+        const aN = pairName(mt.a), bN = pairName(mt.b);
+        if (g) {
+          const aIsA = mt.a.includes(g.a1);
+          const sa = aIsA ? g.score_a : g.score_b, sb = aIsA ? g.score_b : g.score_a;
+          const win = sa > sb;
+          return `<div class="rmatch done">
+            <div class="rteam${win ? ' won' : ''}">${aN}</div>
+            <div class="rscore"><b>${sa}</b><span class="score-dash">–</span><b>${sb}</b> <span class="beats">${CHECK}</span></div>
+            <div class="rteam${!win ? ' won' : ''}">${bN}</div></div>`;
+        }
+        return `<div class="rmatch">
+          <div class="rteam">${aN}</div>
+          <div class="rscore"><input class="field score" data-sa type="number" inputmode="numeric" min="0" placeholder="–">
+            <span class="score-dash">–</span>
+            <input class="field score" data-sb type="number" inputmode="numeric" min="0" placeholder="–"></div>
+          <div class="rteam">${bN}</div>
+          <button class="mini-btn go rlog" data-a="${mt.a.join(',')}" data-b="${mt.b.join(',')}">Log</button></div>`;
+      }).join('');
+      const sit = rnd.sitOut.length ? `<p class="rsit">Duduk dulu: ${rnd.sitOut.map(nameOf).map(esc).join(', ')}</p>` : '';
+      return `<section class="rround"><h3>Round ${rnd.round}</h3>${rows}${sit}</section>`;
+    }).join('');
+  }
+
+  body.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.rlog'); if (!btn) return;
+    err.textContent = '';
+    const wrap = btn.closest('.rmatch');
+    const sa = wrap.querySelector('[data-sa]').value, sb = wrap.querySelector('[data-sb]').value;
+    const serr = sportScoreError('padel', sa, sb, target);
+    if (serr) { err.textContent = serr; return; }
+    const a = btn.dataset.a.split(',').map(Number), b = btn.dataset.b.split(',').map(Number);
+    const okd = await attempt(err, () => api.logSportsGame({
+      leaderboard_id: boardId, sport: 'padel', game_date: session.game_date,
+      a, b, score_a: Number(sa), score_b: Number(sb), session_id: session.id, secret: LOSER_WORD,
+    }));
+    if (okd) { await refresh(); draw(); }
+  });
+
+  draw();
+}
+
 function openGames() {
   let editing = null, confirming = null;   // keyed 'card:5' / 'sport:3'
   const box = el(`<div class="sheet"><h2>Recent games</h2>
@@ -866,6 +1062,20 @@ function padelTableHTML() {
   </section>`;
 }
 
+// A resumable card for the board's most recent Americano night. Tapping reopens the round-runner so
+// you can keep logging (or just read the night's standings). Only shown on a padel board with a session.
+function padelSessionBanner() {
+  const sess = latestSession();
+  if (!sess) return '';
+  const sched = generateSchedule(sess.roster, sess.courts, sess.rounds);
+  const total = sched.rounds.reduce((n, r) => n + r.matches.length, 0);
+  const done = sessionGames(sess.id).length;
+  const complete = done >= total;
+  return `<button class="amer-banner${complete ? ' complete' : ''}" id="resume-amer">
+    <span class="amer-b-title">🎾 Americano · ${esc(sess.game_date)}</span>
+    <span class="amer-b-sub">${done}/${total} matches logged · ${complete ? 'tap to review' : 'tap to resume'}</span></button>`;
+}
+
 function rowsHTML(list, ranked) {
   return list.map((p) => {
     const archived = p.archived ? ' <span class="pill-archived">archived</span>' : '';
@@ -963,8 +1173,16 @@ function render() {
   const cardBtn = hasType('cards')
     ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : ''}>Log game</button>` : '';
   const racquetSport = SPORT_ORDER.find(hasType);   // this board's racquet sport (single-type boards)
-  const sportBtn = hasAnyRacquet()
-    ? `<button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>${SPORTS[racquetSport]?.icon ?? '🏓'} Log game</button>` : '';
+  // A padel board leads with Start Americano (the session flow) and keeps a quiet single-round log;
+  // other racquet boards just have their one Log game button.
+  let sportBtn = '';
+  if (padelBoard) {
+    const dis = act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : '';
+    sportBtn = `<button class="logbar" id="start-amer"${dis}>🎾 Start Americano</button>`
+      + `<button class="logbar ghost" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>＋ Log round</button>`;
+  } else if (hasAnyRacquet()) {
+    sportBtn = `<button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>${SPORTS[racquetSport]?.icon ?? '🏓'} Log game</button>`;
+  }
   document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log buttons
 
   app.innerHTML = `
@@ -976,7 +1194,7 @@ function render() {
     ${padelBoard ? padelSpotlightHTML() : spotlightHTML()}
     ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
       <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
-      : padelBoard ? padelTableHTML()
+      : padelBoard ? `${padelSessionBanner()}${padelTableHTML()}`
       : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}${hasType('padel') ? padelTableHTML() : ''}`}
     ${!noPlayers && (cardBtn || sportBtn) ? `<div class="logbar-wrap">${cardBtn}${sportBtn}</div>` : ''}`;
 
@@ -990,6 +1208,8 @@ function render() {
   document.getElementById('a-export')?.addEventListener('click', doExport);
   document.getElementById('logbtn')?.addEventListener('click', openLog);
   document.getElementById('logsport')?.addEventListener('click', openLogSport);
+  document.getElementById('start-amer')?.addEventListener('click', openStartAmericano);
+  document.getElementById('resume-amer')?.addEventListener('click', () => { const s = latestSession(); if (s) openSessionRunner(s); });
 }
 
 // ---- wire ----

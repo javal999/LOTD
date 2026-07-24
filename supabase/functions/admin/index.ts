@@ -319,11 +319,26 @@ Deno.serve(async (req) => {
         if (rows.some((r) => r.leaderboard_id !== leaderboard_id)) return bad('all players must belong to this leaderboard');
         if (rows.some((r) => r.archived)) return bad('an archived player cannot be added to a new game');
 
+        // Optional Americano session link. A round may only join a padel session on its own board,
+        // and every player must be in that session's roster. The composite FK is the final backstop.
+        const session_id = payload.session_id ?? null;
+        if (session_id !== null) {
+          if (!isId(session_id)) return bad('session_id must be a valid id');
+          if (sport !== 'padel') return bad('only a padel round can belong to a session');
+          const { data: sess, error: es } = await db.from('padel_sessions')
+            .select('leaderboard_id, roster').eq('id', session_id).maybeSingle();
+          if (es) return bad(es.message);
+          if (!sess) return bad('session not found', 404);
+          if (sess.leaderboard_id !== leaderboard_id) return bad('that session belongs to another board');
+          const inRoster = new Set(sess.roster as number[]);
+          if (!named.every((id) => inRoster.has(id as number))) return bad('all players must be in the session roster');
+        }
+
         const { data, error } = await db.from('sports_games')
-          .insert({ leaderboard_id, sport, game_date, a1: payload.a1, a2, b1: payload.b1, b2, score_a, score_b, points_target: padelTarget })
+          .insert({ leaderboard_id, sport, game_date, a1: payload.a1, a2, b1: payload.b1, b2, score_a, score_b, points_target: padelTarget, session_id })
           .select().single();
         if (error) return bad(error.message); // DB CHECKs / composite FK are the final backstop
-        log(true, { leaderboard_id, sports_game_id: data.id });
+        log(true, { leaderboard_id, sports_game_id: data.id, session_id });
         return ok(data);
       }
       case 'undo_last_sports': {
@@ -362,6 +377,41 @@ Deno.serve(async (req) => {
         if (error) return bad(error.message);
         log(true, { sports_game_id });
         return ok({ sports_game_id });
+      }
+
+      // ---- Americano sessions ----
+      case 'create_padel_session': {
+        const { leaderboard_id, game_date, roster, courts, rounds } = payload;
+        const today = isIsoDate(payload.today) ? payload.today : utcToday();
+        if (!isId(leaderboard_id)) return bad('leaderboard_id is required');
+        if (!isIsoDate(game_date)) return bad('game_date must be YYYY-MM-DD');
+        if (game_date > today) return bad("a session can't be dated in the future");
+        if (!Array.isArray(roster) || !roster.every(isId)) return bad('roster must be player ids');
+        if (new Set(roster).size !== roster.length) return bad('a player can only be in the roster once');
+        if (roster.length < 4) return bad('an Americano needs at least 4 players');
+        if (!Number.isInteger(courts) || courts < 1 || courts > 6) return bad('courts must be 1–6');
+        if (!Number.isInteger(rounds) || rounds < 1 || rounds > 60) return bad('rounds must be 1–60');
+
+        // The board must actually play padel.
+        const { data: board, error: eb } = await db.from('leaderboards')
+          .select('game_types').eq('id', leaderboard_id).maybeSingle();
+        if (eb) return bad(eb.message);
+        if (!board) return bad('leaderboard not found', 404);
+        if (!(board.game_types ?? []).includes('padel')) return bad('this board does not play padel');
+
+        // Every roster player must belong to this board and be active.
+        const { data: rows, error: e1 } = await db.from('players')
+          .select('id, leaderboard_id, archived').in('id', roster);
+        if (e1) return bad(e1.message);
+        if (!rows || rows.length !== roster.length) return bad('unknown player in roster');
+        if (rows.some((r) => r.leaderboard_id !== leaderboard_id)) return bad('all players must belong to this board');
+        if (rows.some((r) => r.archived)) return bad('an archived player cannot be in a session');
+
+        const { data, error } = await db.from('padel_sessions')
+          .insert({ leaderboard_id, game_date, roster, courts, rounds }).select().single();
+        if (error) return bad(error.message);
+        log(true, { leaderboard_id, session_id: data.id });
+        return ok(data);
       }
 
       default:

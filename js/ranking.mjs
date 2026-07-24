@@ -97,7 +97,10 @@ export function biggestLoserToday(rows) {
 // loser first). Tie-break: worst point difference, then more rounds, then name. rows come from
 // v_padel_standings { player_id, name, archived, rounds, points_for, points_against }. Provisional
 // below MIN_GAMES_FOR_RATE rounds (a couple of rounds shouldn't crown anyone).
-export function computePadelStandings(rows) {
+// `minRounds` is the sample floor to be ranked (default MIN_GAMES_FOR_RATE for the all-time board).
+// A single Americano night is a complete unit, so its live/summary standings pass minRounds = 1 —
+// everyone who played at least one round is ranked.
+export function computePadelStandings(rows, minRounds = MIN_GAMES_FOR_RATE) {
   const all = rows.map((r) => ({
     ...r,
     avg: r.rounds > 0 ? r.points_for / r.rounds : null,   // avg points per round; lower = worse
@@ -109,7 +112,7 @@ export function computePadelStandings(rows) {
     || (a.point_diff - b.point_diff)  // then worst point difference (the "score" tie-break)
     || (b.rounds - a.rounds)          // then more rounds played (more proof)
     || a.name.localeCompare(b.name);
-  const eligible = (p) => p.rounds >= MIN_GAMES_FOR_RATE;
+  const eligible = (p) => p.rounds >= minRounds;
   const ranked = all.filter(eligible).sort(cmp).map((p, i) => ({ ...p, rank: i + 1 }));
   const unranked = all.filter((p) => !eligible(p));
   return { ranked, unranked };

@@ -33,6 +33,8 @@ declare
   p1 bigint; p2 bigint; p3 bigint; p4 bigint; pb bigint;
   -- template: (leaderboard, sport, a1, a2, b1, b2, score_a, score_b)
   ins text := 'insert into sports_games(leaderboard_id,sport,a1,a2,b1,b2,score_a,score_b) values';
+  -- padel needs an explicit points_target since 0009 (the round length is per-board, snapshotted).
+  insp text := 'insert into sports_games(leaderboard_id,sport,a1,a2,b1,b2,score_a,score_b,points_target) values';
 begin
   insert into leaderboards(name) values ('SpikeA') returning id into la;
   insert into leaderboards(name) values ('SpikeB') returning id into lb;
@@ -56,12 +58,14 @@ begin
   perform pg_temp.expect('tt 10-8 nobody reached 11',false, format('%s(%s,''tt_singles'',%s,null,%s,null,10,8)',  ins, la, p1, p2));
   perform pg_temp.expect('tt 11-11 tie',             false, format('%s(%s,''tt_singles'',%s,null,%s,null,11,11)', ins, la, p1, p2));
 
-  -- ── Padel: two scores summing to 21 ───────────────────────────────────
-  perform pg_temp.expect('padel 13-8 sums 21',       true,  format('%s(%s,''padel'',%s,%s,%s,%s,13,8)', ins, la, p1, p2, p3, p4));
-  perform pg_temp.expect('padel 11-10 sums 21',      true,  format('%s(%s,''padel'',%s,%s,%s,%s,11,10)',ins, la, p1, p2, p3, p4));  -- INVALID as TT
-  perform pg_temp.expect('padel 21-0 sums 21',       true,  format('%s(%s,''padel'',%s,%s,%s,%s,21,0)', ins, la, p1, p2, p3, p4));
-  perform pg_temp.expect('padel 13-7 sums 20',       false, format('%s(%s,''padel'',%s,%s,%s,%s,13,7)', ins, la, p1, p2, p3, p4));
-  perform pg_temp.expect('padel 14-8 sums 22',       false, format('%s(%s,''padel'',%s,%s,%s,%s,14,8)', ins, la, p1, p2, p3, p4));
+  -- ── Padel: two scores summing to the board's points_target (here 21) ──
+  perform pg_temp.expect('padel 13-8 sums 21',       true,  format('%s(%s,''padel'',%s,%s,%s,%s,13,8,21)', insp, la, p1, p2, p3, p4));
+  perform pg_temp.expect('padel 11-10 sums 21',      true,  format('%s(%s,''padel'',%s,%s,%s,%s,11,10,21)',insp, la, p1, p2, p3, p4));  -- INVALID as TT
+  perform pg_temp.expect('padel 21-0 sums 21',       true,  format('%s(%s,''padel'',%s,%s,%s,%s,21,0,21)', insp, la, p1, p2, p3, p4));
+  perform pg_temp.expect('padel 13-7 sums 20',       false, format('%s(%s,''padel'',%s,%s,%s,%s,13,7,21)', insp, la, p1, p2, p3, p4));
+  perform pg_temp.expect('padel 14-8 sums 22',       false, format('%s(%s,''padel'',%s,%s,%s,%s,14,8,21)', insp, la, p1, p2, p3, p4));
+  perform pg_temp.expect('padel no target -> reject', false, format('%s(%s,''padel'',%s,%s,%s,%s,13,8)', ins, la, p1, p2, p3, p4));
+  perform pg_temp.expect('non-padel with a target -> reject', false, format('%s(%s,''tt_singles'',%s,null,%s,null,11,7,21)', insp, la, p1, p2));
 
   -- ── Badminton: first to 21, win by 2, capped at 30 ────────────────────
   perform pg_temp.expect('bd 21-19 clean',           true,  format('%s(%s,''bd_singles'',%s,null,%s,null,21,19)', ins, la, p1, p2));

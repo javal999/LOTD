@@ -1,6 +1,14 @@
 # Development plan — Padel Americano board
 
-**Status:** Proposal for review (nothing built yet) · **Date:** 2026-07-24
+**Status:** ✅ Phase A + Phase B built & shipped · **Date:** 2026-07-24 (updated 2026-07-25)
+
+> **Build notes (2026-07-25):** Phase A shipped in commit `b5ab05d`. Phase B built here: courts are
+> chosen per session (default 1) and the whole schedule is generated up front (both confirmed with
+> Levi). Open questions resolved — A1: all-time by **average** points/round; A2 & the session summary:
+> **fewest points**. B1: the schedule is a suggestion, you log the rounds you actually play. B2: both a
+> live session leaderboard and the persistent all-time board. The generator lives in `americano.mjs`
+> (min-cost matching per round: everyone partners everyone once where the roster allows, sit-outs and
+> opponents balanced); sessions are `padel_sessions` + `sports_games.session_id` (migration 0010).
 
 A "Padel — Americano" board type: you play in rotating pairs, score as an individual, and the board
 ranks people by their own points — pointed at the *loser* (fewest points), LOTD-style. Grounded in

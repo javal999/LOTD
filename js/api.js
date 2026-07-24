@@ -25,7 +25,8 @@ const mock = (() => {
     ],
     games: [],
     sportsGames: [],
-    seqP: 6, seqG: 1, seqB: 2, seqSG: 1,
+    sessions: [],
+    seqP: 6, seqG: 1, seqB: 2, seqSG: 1, seqSess: 1,
   };
   // A little seeded history so the standings aren't empty on first load.
   const seed = (game_date, p, loser) => s.games.push(
@@ -106,6 +107,8 @@ const mock = (() => {
         players: s.players.filter((p) => p.leaderboard_id === id)
           .map((p) => ({ id: p.id, name: p.name, archived: p.archived })).sort((a, b) => a.name.localeCompare(b.name)),
         dailyLosses: dailyLosses(id, localToday()),
+        padelSessions: s.sessions.filter((x) => x.leaderboard_id === id)
+          .slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
       };
     },
     createLeaderboard: (name, game_types, points_target) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES), points_target: points_target ?? null }; s.boards.push(b); return b; },
@@ -136,10 +139,14 @@ const mock = (() => {
     },
     editLoser: (game_id, loser) => { const g = s.games.find((x) => x.id === game_id); if (g) g.loser = loser; return { game_id, loser }; },
     deleteGame: (game_id) => { s.games = s.games.filter((g) => g.id !== game_id); return { game_id }; },
-    logSportsGame: ({ leaderboard_id, sport, game_date, a1, a2, b1, b2, score_a, score_b }) => {
+    logSportsGame: ({ leaderboard_id, sport, game_date, a1, a2, b1, b2, score_a, score_b, session_id = null }) => {
       const pt = sport === 'padel' ? (board(leaderboard_id)?.points_target ?? 21) : null;
-      const g = { id: s.seqSG++, leaderboard_id, sport, game_date, a1, a2: a2 ?? null, b1, b2: b2 ?? null, score_a, score_b, points_target: pt, created_at: new Date().toISOString() };
+      const g = { id: s.seqSG++, leaderboard_id, sport, game_date, a1, a2: a2 ?? null, b1, b2: b2 ?? null, score_a, score_b, points_target: pt, session_id, created_at: new Date().toISOString() };
       s.sportsGames.push(g); return g;
+    },
+    createPadelSession: ({ leaderboard_id, game_date, roster, courts, rounds }) => {
+      const sess = { id: s.seqSess++, leaderboard_id, game_date, roster: [...roster], courts, rounds, created_at: new Date().toISOString() };
+      s.sessions.push(sess); return sess;
     },
     undoLastSports: (id) => {
       const last = sportsOf(id).slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
@@ -170,16 +177,17 @@ export async function loadBoard(leaderboardId) {
   const id = Number(leaderboardId);
   if (USE_MOCK) return mock.loadBoard(id);
   const today = localToday();
-  const [standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses] = await Promise.all([
+  const [standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses, padelSessions] = await Promise.all([
     get(`v_standings?select=player_id,name,gp,losses,archived&leaderboard_id=eq.${id}&order=name`),
     get(`v_sport_standings?select=sport,player_id,name,games,losses,archived&leaderboard_id=eq.${id}&sport=neq.cards&order=name`),
     get(`v_padel_standings?select=player_id,name,archived,rounds,points_for,points_against&leaderboard_id=eq.${id}&order=name`),
     get(`games?select=id,game_date,p1,p2,p3,p4,loser,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
-    get(`sports_games?select=id,game_date,sport,a1,a2,b1,b2,score_a,score_b,points_target,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
+    get(`sports_games?select=id,game_date,sport,a1,a2,b1,b2,score_a,score_b,points_target,session_id,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
     get(`players?select=id,name,archived&leaderboard_id=eq.${id}&order=name`),
     get(`v_daily_losses?select=player_id,name,losses&leaderboard_id=eq.${id}&game_date=eq.${today}`),
+    get(`padel_sessions?select=id,game_date,roster,courts,rounds,created_at&leaderboard_id=eq.${id}&order=created_at.desc`),
   ]);
-  return { standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses };
+  return { standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses, padelSessions };
 }
 
 // ---- admin session ----
@@ -237,12 +245,19 @@ export const deleteGame = (game_id) =>
 
 // Racquet writes. `a`/`b` are the player ids on each side ([one] for singles, [two] for doubles);
 // the lower score loses. `secret` is the confess-word, proven inline just like a card log.
-export const logSportsGame = ({ leaderboard_id, sport, game_date, a, b, score_a, score_b, secret }) => {
+export const logSportsGame = ({ leaderboard_id, sport, game_date, a, b, score_a, score_b, session_id = null, secret }) => {
   const p = { a1: a[0], a2: a[1] ?? null, b1: b[0], b2: b[1] ?? null };
   return USE_MOCK
-    ? mock.logSportsGame({ leaderboard_id, sport, game_date, ...p, score_a, score_b })
-    : call('log_sports_game', { leaderboard_id, sport, game_date, today: localToday(), ...p, score_a, score_b }, secret);
+    ? mock.logSportsGame({ leaderboard_id, sport, game_date, ...p, score_a, score_b, session_id })
+    : call('log_sports_game', { leaderboard_id, sport, game_date, today: localToday(), ...p, score_a, score_b, session_id }, secret);
 };
+
+// Start an Americano night: a fixed roster, court count, and round target. The pairing schedule is
+// derived client-side from these (americano.mjs), so only the inputs are stored. Uses the confess
+// word inline, same as logging — anyone at the table can run the night without unlocking.
+export const createPadelSession = ({ leaderboard_id, game_date, roster, courts, rounds, secret }) =>
+  USE_MOCK ? mock.createPadelSession({ leaderboard_id, game_date, roster, courts, rounds })
+    : call('create_padel_session', { leaderboard_id, game_date, today: localToday(), roster, courts, rounds }, secret);
 export const undoLastSports = (leaderboard_id, secret) =>
   USE_MOCK ? mock.undoLastSports(leaderboard_id) : call('undo_last_sports', { leaderboard_id }, secret);
 export const editSportsScore = (sports_game_id, score_a, score_b) =>

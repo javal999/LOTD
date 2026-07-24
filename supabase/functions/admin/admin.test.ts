@@ -467,3 +467,83 @@ Deno.test('padel: adjustable points-per-round target', async (t) => {
     assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
   });
 });
+
+Deno.test('padel Americano sessions', async (t) => {
+  let lb = 0, cards = 0, other = 0, sess = 0, otherSess = 0, outsider = 0;
+  const p: number[] = [];
+
+  await t.step('setup: padel board + 5 players, a cards board, an outsider board+session', async () => {
+    lb = (await call('create_leaderboard', { name: `Amer ${Date.now()}`, game_types: ['padel'], points_target: 21 })).body.data.id;
+    for (const name of ['A', 'B', 'C', 'D', 'E']) p.push((await call('add_player', { leaderboard_id: lb, name })).body.data.id);
+    cards = (await call('create_leaderboard', { name: `Cards ${Date.now()}`, game_types: ['cards'] })).body.data.id;
+    other = (await call('create_leaderboard', { name: `AmerOther ${Date.now()}`, game_types: ['padel'], points_target: 21 })).body.data.id;
+    outsider = (await call('add_player', { leaderboard_id: other, name: 'Outsider' })).body.data.id;
+    for (const name of ['O2', 'O3', 'O4']) await call('add_player', { leaderboard_id: other, name });
+  });
+
+  await t.step('create_padel_session (4 of 5, 1 court, 3 rounds) -> ok', async () => {
+    const r = await call('create_padel_session', {
+      leaderboard_id: lb, game_date: TODAY, today: TODAY, roster: [p[0], p[1], p[2], p[3]], courts: 1, rounds: 3,
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.courts, 1);
+    assertEquals(r.body.data.rounds, 3);
+    sess = r.body.data.id;
+  });
+
+  await t.step('roster under 4 -> 400', async () => {
+    const r = await call('create_padel_session', { leaderboard_id: lb, game_date: TODAY, today: TODAY, roster: [p[0], p[1], p[2]], courts: 1, rounds: 3 });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('session on a non-padel board -> 400', async () => {
+    const r = await call('create_padel_session', { leaderboard_id: cards, game_date: TODAY, today: TODAY, roster: [p[0], p[1], p[2], p[3]], courts: 1, rounds: 3 });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('roster player from another board -> 400', async () => {
+    const r = await call('create_padel_session', { leaderboard_id: lb, game_date: TODAY, today: TODAY, roster: [p[0], p[1], p[2], outsider], courts: 1, rounds: 3 });
+    assertEquals(r.status, 400);
+  });
+
+  await t.step('log a padel round into the session -> ok, session_id snapshotted', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 8, session_id: sess,
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.session_id, sess);
+  });
+
+  await t.step('round with a player not in the roster -> 400', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[4], b1: p[2], b2: p[3], score_a: 13, score_b: 8, session_id: sess,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('roster'), r.body.error);
+  });
+
+  await t.step('round linking a session from another board -> 400', async () => {
+    // A real session on `other`, using that board's own four players.
+    const res = await fetch(`${REST}/players?select=id&leaderboard_id=eq.${other}&order=id&limit=4`, {
+      headers: { apikey: ANON, Authorization: `Bearer ${ANON}` },
+    });
+    const oRoster = (await res.json()).map((r: { id: number }) => r.id);
+    otherSess = (await call('create_padel_session', {
+      leaderboard_id: other, game_date: TODAY, today: TODAY, roster: oRoster, courts: 1, rounds: 3,
+    })).body.data.id;
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'padel', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 8, session_id: otherSess,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('another board'), r.body.error);
+  });
+
+  await t.step('cleanup', async () => {
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: cards })).status, 200);
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: other })).status, 200);
+  });
+});
