@@ -15,7 +15,7 @@ a table tennis or padel night.
 
 v4 introduces **game types**. A leaderboard enables one or more of them; each logged game picks one
 and *snapshots its rules*. That's what lets a single board hold a 1v1 table tennis game to 11 **and**
-a padel Americano round to 24 — and rank everyone on one honest number.
+a padel Americano round to 21 — and rank everyone on one honest number.
 
 **Decisions locked with Levi:**
 
@@ -23,12 +23,12 @@ a padel Americano round to 24 — and rank everyone on one honest number.
 |---|---|
 | Sports on one board | **Table tennis + padel together** |
 | Table tennis format | **Both singles (1v1) and doubles (2v2)** |
-| Unit of record | **One game** — TT: to 11, win by 2 · Padel: a 24-point round |
+| Unit of record | **One game** — TT: to 11, win by 2 · Padel: a 21-point Americano round |
 | Ranking metric | **Point share** — `points_for / (points_for + points_against)` |
 | Pairings | **Just record** — LOTD never decides who plays whom |
 
 **Why one board works:** point share is *length-independent*. A table tennis 11–7 (share `0.611`) and
-a padel 15–9 (share `0.625`) are directly comparable, because both ask the same question — what
+a padel 13–8 (share `0.619`) are directly comparable, because both ask the same question — what
 fraction of the points on the table did you win? Total points could never do this; that's the single
 most important consequence of Levi's metric choice.
 
@@ -69,13 +69,16 @@ exactly 4, so whoever sits out is invisible to the record.
 
 ### Padel Americano / Mexicano
 You always play doubles but **score as an individual** — the score your side achieves is also your
-personal score. A **24-point round** finishing 15–9 gives *each* winner 15 and *each* loser 9.
+personal score. A **21-point round** finishing 13–8 gives *each* winner 13 and *each* loser 8.
 Partners rotate; the points are always yours. Mexicano differs only in regenerating pairings from the
 live leaderboard each round.
 
 **Consequence — and the thing that breaks a naive design:** an Americano round is a **fixed total**
-of points (`for + against == 24`), not a race to a target. A padel round *can* end 12–12, so padel
-**can** draw where table tennis cannot.
+of points (`for + against == 21`), not a race to a target.
+
+**A useful accident of Levi's choice:** the group plays to **21, which is odd**, so a round can never
+split evenly — draws are *arithmetically impossible*. The `allow_draws` machinery still has to exist
+(an even target like 24 would need it) but on this board the path stays dormant.
 
 ### The two scoring rules
 
@@ -84,7 +87,7 @@ This is the core technical finding of the research:
 | Rule | Sport | Validation | Draws |
 |---|---|---|---|
 | **`first_to`** | Table tennis | winner reaches target; optionally win-by-2 | impossible |
-| **`total_points`** | Padel Americano | `for + against == target` exactly | possible (12–12) |
+| **`total_points`** | Padel Americano | `for + against == target` exactly | only on an even target |
 
 They are not interchangeable, so **the rule belongs to the game type**, not the board.
 
@@ -112,8 +115,9 @@ They are not interchangeable, so **the rule belongs to the game type**, not the 
 
 ## 4. Non-goals
 
-1. **Not a tournament organiser.** No Americano schedule generation, no Mexicano re-pairing. *(Levi's
-   explicit choice: "just record". Avoids the hardest feature in the category.)*
+1. **Not a tournament organiser.** No upfront Americano schedule, no multi-court allocation, no
+   Mexicano re-pairing. *(Levi's choice: "just record". See §11 for the benchmark and the maths that
+   backs this up — a **partner suggestion** is in scope as P1; a generated schedule is not.)*
 2. **No skill ratings (Elo/Glicko).** Changes the product from "who lost" to "who is good".
 3. **No live/in-progress scoring.**
 4. **No match-level record (best of 3/5).** One game is the unit; a match is several rows.
@@ -134,22 +138,21 @@ and snapshots its rules.
 |---|---|---|---|---|---|---|
 | **Table tennis — singles** | 2 | 1 | `first_to` | 11 | ✅ | ❌ |
 | **Table tennis — doubles** | 2 | 2 | `first_to` | 11 | ✅ | ❌ |
-| **Padel — Americano** | 2 | 2 | `total_points` | 24 | — | ✅ |
-| **Padel — match** | 2 | 2 | `first_to` | 6 (games) | ✅ | ❌ |
+| **Padel — Americano** | 2 | 2 | `total_points` | **21** | — | ❌ *(21 is odd)* |
 | **Card game — odd one out** | 3–8 | 1 | `elimination` | — | — | ❌ |
 | **Custom** | pick | pick | pick | pick | pick | pick |
 
-Types 1–4 are **points family**; type 5 is **loss family**. A board may enable any number of types
+Types 1–3 are **points family**; type 4 is **loss family**. A board may enable any number of types
 **within one family**.
 
 ### 5.2 Why the rules live on the type, not the board
 
 Because the group plays both sports on one board, a board-level `points_target` is meaningless — is
-it 11 or 24? Attaching rules to the game type solves it, and snapshotting them onto each game row at
+it 11 or 21? Attaching rules to the game type solves it, and snapshotting them onto each game row at
 write time means:
 
 - A table tennis game validates as *first to 11, win by 2*.
-- A padel round logged an hour later validates as *totals must sum to 24*.
+- A padel round logged an hour later validates as *totals must sum to 21*.
 - Both live on the same board, each permanently self-describing.
 - Changing a type's default later **never invalidates history**.
 
@@ -175,7 +178,7 @@ Everything else sits behind an **Advanced** disclosure.
 | 4 | **Ranking metric** | yes | Point share | ✅ anytime | Point share / total points / loss index — a *view*, not a commitment (§6.4) |
 | 5 | **Min games to rank** | yes | `5` | ✅ anytime | Provisional threshold |
 | 6 | **Default game type** | no | first enabled | ✅ anytime | What the log sheet opens on |
-| 7 | *(per type)* **Target** | no | type default | ✅ snapshotted per game | 11 for TT, 24 for padel |
+| 7 | *(per type)* **Target / round length** | no | type default | ✅ **editable input**, snapshotted per game | A number field: 11 for TT, **21 for padel**. Editable at board setup *and* per round (§10 Flow C) |
 | 8 | *(per type)* **Win by 2** | no | type default | ✅ snapshotted per game | Deuce handling |
 | 9 | *(per type)* **Allow draws** | no | type default | ✅ where legal | Auto-off when win-by-2 |
 
@@ -226,7 +229,7 @@ point_share = points_for / (points_for + points_against)
 |---|---|---|
 | Table tennis singles | 11–7 | `11/18 = 0.611` |
 | Table tennis deuce | 15–13 | `15/28 = 0.536` |
-| Padel Americano | 15–9 | `15/24 = 0.625` |
+| Padel Americano | 13–8 | `13/21 = 0.619` |
 
 All three are the same question: *what fraction of the points on the table did you win?* Total points
 could never do this — a padel round would outweigh three table tennis games purely by being longer.
@@ -301,18 +304,29 @@ for + against == target  and  both >= 0
 if not allow_draws:  for != against
 ```
 
-For `target = 24`:
+For `target = 21`:
 
 | Score | Verdict | Why |
 |---|---|---|
-| `15–9`, `24–0`, `13–11` | ✅ | sums to 24 |
-| `12–12` | ✅ | draw — legal in Americano |
-| `15–8` | ❌ | sums to 23 — a point is missing |
-| `16–9` | ❌ | sums to 25 |
+| `13–8`, `21–0`, `12–9` | ✅ | sums to 21 |
+| `11–10` | ✅ | sums to 21 — a one-point round is legal here |
+| `13–7` | ❌ | sums to 20 — a point is missing |
+| `14–8` | ❌ | sums to 22 |
 | `11–7` | ❌ | sums to 18 — that's a table tennis score on a padel round |
+| any draw | n/a | impossible: 21 is odd, so the scores can never be equal |
 
-Error messages must teach: *"A padel round is 24 points total — 15–8 only adds to 23."* and
-*"11–10 isn't possible — at 10–10 you play on until someone leads by 2."*
+### 8.3 The case that proves the whole design
+
+**`11–10` is valid padel and invalid table tennis.**
+
+- Padel (`total_points`, 21): `11 + 10 = 21` ✅
+- Table tennis (`first_to` 11, win by 2): margin is 1 ❌ — *"at 10–10 you play on until someone leads by 2"*
+
+Identical numbers, opposite verdicts, on the same board, on the same evening. This is exactly why the
+scoring rule belongs to the **game type** and is **snapshotted onto the game** — a single board-level
+validator could not get both right.
+
+Error messages must teach, not scold: *"A padel round is 21 points total — 13–7 only adds to 20."*
 
 ---
 
@@ -320,7 +334,7 @@ Error messages must teach: *"A padel round is 24 points total — 15–8 only ad
 
 **Multi-sport (new, primary)**
 - As a player, I want table tennis and padel on one standing, so there's a single running joke.
-- As a player, I want the app to know a padel round is 24 points and a TT game is to 11, so I never
+- As a player, I want the app to know a padel round is 21 points and a TT game is to 11, so I never
   have to remember which rules apply.
 - As a player, I want my padel and table tennis results comparable, so the standing means something.
 
@@ -366,9 +380,12 @@ Error messages must teach: *"A padel round is 24 points total — 15–8 only ad
 2. Tap the 4 players who were on court. Anyone sitting out simply isn't selected — **they get no
    game**.
 3. Tap **Split** — deal into **Side A** / **Side B**; tap a name to move it. Header: `A: 2 · B: 2`.
-4. Type the round score, e.g. `15` – `9`. A live hint reads **`24 / 24 points ✓`** as you type, so a
+4. **Round length** shows as an editable number field, pre-filled `21`. Leave it, or tap it and type
+   `16` if you played a short round — the validator follows whatever is in that field, and the value
+   is snapshotted onto this game only.
+5. Type the round score, e.g. `13` – `8`. A live hint reads **`21 / 21 points ✓`** as you type, so a
    miscount is caught before you save.
-5. **Simpan.** Both A players get `+15 for / +9 against`; both B players the mirror. **Individual
+6. **Simpan.** Both A players get `+13 for / +8 against`; both B players the mirror. **Individual
    credit, Americano-style.**
 
 ### Flow D — Log a card game (unchanged, now any size)
@@ -387,22 +404,107 @@ Error messages must teach: *"A padel round is 24 points total — 15–8 only ad
 
 ---
 
-## 11. Requirements
+## 11. Americano capability benchmark — what "partner mixing" costs
+
+Levi asked what capability we'd need for real Americano play, including partner mixing. Here is the
+benchmark against the dedicated apps, and the maths that decides it.
+
+### 11.1 What the dedicated apps ship
+
+| Capability | Americano apps | LOTD today | LOTD v4 as specced |
+|---|---|---|---|
+| Auto partner rotation (everyone partners everyone) | ✅ core | ❌ | ❌ → **P1 as a suggestion** |
+| Full schedule generated upfront | ✅ | ❌ | ❌ |
+| Multi-court allocation | ✅ | ❌ | ❌ |
+| Bye / sit-out management | ✅ "intelligent" | n/a | ✅ *(just don't select them)* |
+| Individual points from a team score | ✅ | ❌ | ✅ |
+| Live standings during the night | ✅ | ✅ | ✅ |
+| Mexicano re-pairing by live rank | ✅ | ❌ | ❌ |
+| **History that survives the night** | ❌ *mostly per-event* | ✅ | ✅ |
+| **Multiple sports on one standing** | ❌ | ❌ | ✅ |
+
+> **The strategic read: those apps are *event* tools; LOTD is a *history* tool.** They organise one
+> evening then forget it. LOTD remembers who has been losing since March. Copying their whole feature
+> set would trade our only real advantage for a commodity one.
+
+### 11.2 The algorithm, if we built it
+
+Standard **circle method**: fix one player, rotate the rest each round. With 8 players it yields 7
+rounds in which every possible pairing occurs exactly once. Larger or odd groups need bye rotation
+and the guarantee weakens to "maximise variety, never repeat until forced".
+
+### 11.3 The maths for *your* group — this is the deciding factor
+
+Your active roster is **7 players**, on **1 court** (4 on, 3 off):
+
+| | |
+|---|---|
+| Distinct partnerships to cover | `C(7,2)` = **21** |
+| Partnerships created per round | 2 *(one per side)* |
+| Rounds for a complete Americano | `⌈21 / 2⌉` = **11** |
+| At ~12 min/round | **≈ 2 h 15 m of play**, with 3 people idle every round |
+
+**A complete Americano is not achievable on a normal night with 7 players and one court.** Any
+schedule generated upfront would be abandoned halfway through — and a half-abandoned schedule is
+*worse than none*, because it also blocks the ad-hoc pairing people actually fall back to.
+
+This is the empirical reason to reject Tier 2 below, not a taste preference.
+
+### 11.4 The three tiers of partner mixing
+
+| Tier | What it does | What it needs | Effort | Verdict |
+|---|---|---|---|---|
+| **0 — Just record** | You pair socially; the app logs | nothing beyond v4 | — | Current plan |
+| **1 — Suggest the next pair** | "Levi & Sebas haven't partnered yet" | a partnership-count view + greedy least-paired pick | **small** | ✅ **Recommended (P1)** |
+| **2 — Full schedule** | Generate every round upfront | locked roster, sessions, schedule storage, bye rotation, court allocation | large | ❌ §11.3 |
+| **3 — Mexicano** | Re-pair each round by live standings | Tier 2 + mid-session standings + re-pair logic | large | ❌ |
+
+### 11.5 Recommendation — Tier 1, and the bonus it unlocks
+
+Tier 1 gives ~80% of the "everyone plays with everyone" benefit for ~10% of the cost, and it
+**degrades gracefully**: people arriving late or leaving early can't break a suggestion the way they
+break a schedule. It needs one derived view:
+
+```sql
+-- how many times each pair has been on the SAME side
+v_partnerships(leaderboard_id, player_a, player_b, times_partnered, times_opposed)
+```
+
+From that, "suggest" is a greedy pick of the four selected players' least-used split. No scheduling,
+no session lock, no courts.
+
+**The bonus:** that same view is a roasting goldmine, and roasting is the product —
+*"Levi and Nadhif have never won a single round together"*, *"you always lose when you partner
+Sebas"*. Tier 2 gives you logistics; Tier 1 gives you logistics **and** material. That asymmetry is
+why it's the recommendation.
+
+**Sources:** [Padel Americano Generator](https://padel-bracket.com/americano/) ·
+[Americano Padel App](https://americano-padel.app/en/) ·
+[Padeltify — tournament generator](https://www.padeltify.com/) ·
+[Padel-Americano tournament manager (GitHub)](https://github.com/ptzimmerman/Padel-Americano) ·
+[PlayRez — Americano generator](https://playrez.com/tools/padel-americano-generator) ·
+[dcode — round-robin pairing](https://www.dcode.fr/round-robin-pairing-tournament) ·
+[PadelMake — classic Americano](https://www.padelmake.com/padel-classic-americano)
+
+---
+
+## 12. Requirements
 
 ### P0 — cannot ship without
 
 | # | Requirement | Acceptance criteria |
 |---|---|---|
 | R1 | Game types as first-class, board enables 1..n within one family | Given TT-singles + TT-doubles + Padel enabled, when logging, then a type picker offers exactly those three |
-| R2 | Per-game rule snapshot (`scoring_rule`, `target`, `win_by_2`, `allow_draws`) | Changing the padel target to 32 leaves existing 24-point rounds valid and correctly scored |
-| R3 | Two scoring rules implemented: `first_to` and `total_points` | Every row of the §8.1 and §8.2 tables is a unit test |
+| R2 | Per-game rule snapshot (`scoring_rule`, `target`, `win_by_2`, `allow_draws`) | Changing the padel target to 32 leaves existing 21-point rounds valid and correctly scored |
+| R3 | Two scoring rules implemented: `first_to` and `total_points` | Every row of §8.1 and §8.2 is a unit test, **including §8.3: `11–10` passes as padel and fails as table tennis** |
 | R4 | Board creation captures §6.1 fields with presets | "Table tennis + Padel" ticked → family=points, metric=point_share, both types enabled |
 | R5 | Scoring family locks at first game; cards excluded from a sports board | Change attempt → `409`; card type greyed with an explanation, not hidden |
 | R6 | Singles and doubles on one board | A 1v1 and a 2v2 both appear in standings, both baseline 0.50 |
 | R7 | Winner derived from score, never asked separately | No "who won?" control exists in the points flow |
 | R8 | Individual credit from side result | Padel 15–9 → both winners `for=15/against=9`; both losers the mirror |
 | R9 | Point share ranking, total points secondary | Sorted share ascending (biggest loser first) |
-| R10 | Live total hint for `total_points` types | Typing 15 and 8 shows `23 / 24` in a warning colour; save disabled |
+| R10 | Live total hint for `total_points` types | Typing 13 and 7 shows `20 / 21` in a warning colour; save disabled |
+| R10b | **Round length is an editable input**, defaulting to the type's target, snapshotted per game | Setting a round to 16 validates against 16 and leaves other rounds at 21 |
 | R11 | A player cannot appear twice in one game | `PRIMARY KEY (game_id, player_id)`; clear API error, not a 500 |
 | R12 | Rules enforced at the DB layer, not only the Edge Function | Deferred trigger rejects <2 sides, empty side, ≠1 loss in elimination, invalid score for the game's own rule |
 | R13 | Lossless migration of all v3 games | Post-migration gp/losses byte-identical to a pre-migration snapshot, asserted in CI |
@@ -414,6 +516,8 @@ Error messages must teach: *"A padel round is 24 points total — 15–8 only ad
 | # | Requirement |
 |---|---|
 | R16 | **Per-sport breakdown** — filter the standing to one game type (settles "I'm only bad at padel") |
+| R16b | **Partner suggestion (Tier 1, §11.4)** — `v_partnerships` view + "suggest split" on the 4 selected players |
+| R16c | **Partnership stats** — "never won with X", most/least frequent partner (roasting material from the same view) |
 | R17 | Head-to-head records (`Levi beats Rafi 7–3`) — natural once singles exist |
 | R18 | Toggle standings between point share and Loss Index (data already supports it) |
 | R19 | Export includes types, sides, participants, scores, per-game rules; standings rebuildable from it alone |
@@ -432,7 +536,7 @@ Error messages must teach: *"A padel round is 24 points total — 15–8 only ad
 
 ---
 
-## 12. Data model
+## 13. Data model
 
 ```sql
 -- a board enables game types; family is derived and locked at first game
@@ -524,17 +628,17 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 
 ---
 
-## 13. Edge cases & negative cases
+## 14. Edge cases & negative cases
 
 ### Multi-sport board
 | # | Case | Expected behaviour |
 |---|---|---|
-| EC-1 | Padel round `11–7` (a table tennis score) | Rejected: *"a padel round is 24 points total — 11–7 only adds to 18"* |
+| EC-1 | Padel round `11–7` (a table tennis score) | Rejected: *"a padel round is 21 points total — 11–7 only adds to 18"* |
 | EC-2 | Table tennis game `15–9` (a padel score) | Rejected: at target 11, `15–9` has margin 6, not 2 |
-| EC-3 | Padel target changed 24 → 32 mid-history | Old rounds keep `points_target=24` and stay valid (§5.2) |
+| EC-3 | Padel target changed 21 → 32 mid-history | Old rounds keep `points_target=21` and stay valid (§5.2) |
 | EC-4 | Game type deleted while games reference it | Blocked by `ON DELETE RESTRICT`; offer *disable* instead (hides from the picker, keeps history) |
 | EC-5 | Type disabled then re-enabled | History untouched throughout |
-| EC-6 | Board mixes TT (to 11) and padel (to 24) | **Allowed and comparable** — point share is length-independent (§7.1). The whole point |
+| EC-6 | Board mixes TT (to 11) and padel (to 21) | **Allowed and comparable** — point share is length-independent (§7.1). The whole point |
 | EC-7 | Adding a *loss-family* type to a points board | Rejected — family lock (§7.4) |
 | EC-8 | Board enabled for padel only, user tries a singles game | Rejected: allowed types named in the error |
 | EC-9 | Same player in a TT game and a padel round on one day | Fine — both count; daily spotlight aggregates across types |
@@ -556,12 +660,17 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 ### Padel scores (`total_points`)
 | # | Case | Expected behaviour |
 |---|---|---|
-| EC-20 | `15–8` (sums to 23) | Rejected with the running total shown — *"23 / 24"* |
-| EC-21 | `16–9` (sums to 25) | Rejected — *"25 / 24"* |
-| EC-22 | `12–12` | **Valid** — draws are legal in Americano; both share 0.50, neither gets a loss |
-| EC-23 | `24–0` | Valid |
-| EC-24 | Draws disabled but `12–12` entered | Rejected with a pointer to the setting |
-| EC-25 | Odd target (25) making draws impossible | Allowed; the draw case simply never arises |
+| EC-20 | `13–7` (sums to 20) | Rejected with the running total shown — *"20 / 21"* |
+| EC-21 | `14–8` (sums to 22) | Rejected — *"22 / 21"* |
+| EC-22 | **`11–10`** | **Valid** as padel (sums to 21) — and the *same score is invalid* as table tennis. See §8.3 |
+| EC-23 | `21–0` | Valid |
+| EC-24 | Any equal score at target 21 | **Arithmetically impossible** — odd total. The draw path never triggers on this board |
+| EC-25 | Target later changed to an even number (24) | Draws become reachable; `allow_draws` must then be honoured, so the code path still has to exist and be tested |
+| EC-25b | Round length overridden to 16 for one round | Valid; snapshotted to that game only. Point share is length-independent so it stays comparable (§7.1) |
+| EC-25c | Round length set to 0 or negative | Rejected (`between 1 and 99`) |
+| EC-25d | Round length edited *after* the game was saved | Re-validates the existing score against the new length; rejected if it no longer sums — never silently corrupts |
+| EC-25e | Partner suggestion when all pairs are equally used | Deterministic fallback (name order) so the same 4 players always get the same suggestion |
+| EC-25f | Partner suggestion with fewer than 4 selected | Button disabled — nothing to split |
 
 ### Sides & participants
 | # | Case | Expected behaviour |
@@ -613,7 +722,7 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 
 ---
 
-## 14. Success metrics
+## 15. Success metrics
 
 **Leading (4 weeks)**
 - One combined board carrying **both** table tennis and padel games.
@@ -632,7 +741,7 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 
 ---
 
-## 15. Phasing
+## 16. Phasing
 
 | Phase | Scope | Why this order |
 |---|---|---|
@@ -646,7 +755,7 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 
 ---
 
-## 16. Risks
+## 17. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
@@ -661,16 +770,29 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 
 ---
 
-## 17. Open questions
+## 18. Open questions
+
+### 18.1 Resolved
+
+| Decision | Answer | Consequence |
+|---|---|---|
+| Sports on one board? | **Yes — TT + padel together** | Drove the whole game-type design (§5) |
+| TT singles or doubles? | **Both** | Side size 1–2 on one board |
+| Unit of record | **One game** | No match-level record (non-goal 4) |
+| Ranking metric | **Point share** | The reason one board is possible (§7.1) |
+| Pairings | **Just record** | No Americano/Mexicano generation (non-goal 1) |
+| Padel point total | **21** | Odd ⇒ draws impossible on this board (§2) |
+| Padel matches too? | **No — Americano only** | `Padel — match` type dropped |
+| "Cappuccino" | **Withdrawn — not a real format** | No action |
+
+### 18.2 Still open
 
 | # | Question | Owner | Blocking? |
 |---|---|---|---|
-| Q1 | **What exactly is "cappuccino"?** Not found in any padel or table tennis source, EN or ID. Club-specific name for Americano/Mexicano, a mixed variant, or different rules? Likely already covered by the model — I need the rules to confirm, and to know whether it's `first_to` or `total_points`. | Levi | Only for that type |
-| Q2 | What **point total** does your group actually play padel Americano to — 16, 24, 32? Sets the default. | Levi | No |
-| Q3 | Do you ever play table tennis to **21**, or is 11 universal? | Levi | No |
-| Q4 | Do you play **padel matches** (real sets/games) as well as Americano rounds? If so, `Padel — match` needs enabling as a separate type. | Levi | No |
-| Q5 | Should the daily spotlight be **most games lost** (recommended, keeps LOTD's identity) or **lowest share today**? | Levi | No — default set |
-| Q6 | Cap on games/day per IP, given open writes? | Levi | No |
+| Q1 | Do you ever play table tennis to **21** as well as 11? Only sets a default; the target is per-type either way. | Levi | No |
+| Q2 | Should the daily spotlight be **most games lost** (recommended — keeps LOTD's identity) or **lowest share today**? | Levi | No — default set |
+| Q3 | Do you want the **per-sport breakdown** (R16) in the first padel release, or wait until someone argues "I'm only bad at padel"? | Levi | No |
+| Q4 | Cap on games/day per IP, given writes are open? | Levi | No |
 
 ---
 
@@ -687,17 +809,21 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 
 **A3. Deuce** — `15–13` valid (margin exactly 2, above target). Shares `0.536` / `0.464`.
 
-**A4. Padel Americano** — A(Levi, Rafi) 15 – 9 B(Nadhif, Sebas), target 24
-- Levi and Rafi: `for=15, against=9`, share `0.625`
-- Nadhif and Sebas: `for=9, against=15`, share `0.375`
+**A4. Padel Americano** — A(Levi, Rafi) 13 – 8 B(Nadhif, Sebas), target 21
+- Levi and Rafi: `for=13, against=8`, share `0.619`
+- Nadhif and Sebas: `for=8, against=13`, share `0.381`
 - Anyone sitting out: **nothing recorded**
 
-**A5. Padel draw** — `12–12`: both sides share `0.500`, neither gets a loss, both `gp +1`.
+**A5. The same score, two verdicts** (the §8.3 case — make this an explicit test)
+`11–10` submitted as **Padel Americano** → ✅ valid (`11+10 = 21`).
+`11–10` submitted as **Table tennis** → ❌ rejected (margin 1, needs 2).
+One board, one evening, opposite results. If a refactor ever makes these agree, the rule snapshot has
+been broken.
 
 **A6. Mixed sports on one board — why share beats total points**
-Levi plays one TT game (`11–4`) and one padel round (`15–9`).
-- Total points = 26 — meaningless, because the padel round is inherently worth more.
-- Share = `26 / (26 + 13) = 0.667` — comparable to anyone else's, regardless of sport.
+Levi plays one TT game (`11–4`) and one padel round (`13–8`).
+- Total points = 24 — meaningless, because the padel round is inherently worth more.
+- Share = `24 / (24 + 12) = 0.667` — comparable to anyone else's, regardless of sport.
 
 **A7. Pure 4-player card board (migration safety)**
 20 games, 8 losses → loss_rate 0.40; expected = 20 × 0.25 = 5; index = 8/5 = **1.60**.
