@@ -51,7 +51,7 @@ button; no data is lost. Reads are public, so this is never a passcode problem.
 ## Change the schema
 Add a new file under `supabase/migrations/`, then:
 ```bash
-supabase db push --project-ref ptpijvdsyrlpqwctkzbp
+supabase db push --linked
 ```
 Migrations are forward-only here. Test locally first: `supabase start && supabase db reset`.
 
@@ -79,7 +79,7 @@ Additive and backward-compatible: the card game is untouched, so each step is sa
 live site keeps working between them. Do them in order.
 ```bash
 # 1. Apply the new migrations (sports_games, standings views, board-isolation FKs, partnerships)
-supabase db push --project-ref ptpijvdsyrlpqwctkzbp        # applies 0003–0006
+supabase db push --linked        # applies 0003–0006
 # 2. Deploy the Edge Function (adds log_sports_game + undo/edit/delete; card actions unchanged)
 supabase functions deploy admin --project-ref ptpijvdsyrlpqwctkzbp --use-api
 # 3. Deploy the frontend (activates the Racquet button + sport standings)
