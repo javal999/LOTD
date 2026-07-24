@@ -506,6 +506,7 @@ why it's the recommendation.
 | R10 | Live total hint for `total_points` types | Typing 13 and 7 shows `20 / 21` in a warning colour; save disabled |
 | R10b | **Round length is an editable input**, defaulting to the type's target, snapshotted per game | Setting a round to 16 validates against 16 and leaves other rounds at 21 |
 | R11 | A player cannot appear twice in one game | `PRIMARY KEY (game_id, player_id)`; clear API error, not a 500 |
+| R11b | **Boards are isolated at the DB layer** — a game can only contain players from its own board | Composite FK (§13). Test: inserting a cross-board game **fails**, where today it silently succeeds and drops a player from the standings |
 | R12 | Rules enforced at the DB layer, not only the Edge Function | Deferred trigger rejects <2 sides, empty side, ≠1 loss in elimination, invalid score for the game's own rule |
 | R13 | Lossless migration of all v3 games | Post-migration gp/losses byte-identical to a pre-migration snapshot, asserted in CI |
 | R14 | Card flow stays 3 interactions | 4 active → pre-selected → confess → save |
@@ -610,6 +611,54 @@ for each v3 game:
 Then assert `SELECT name, gp, losses FROM v_standings` matches a pre-migration snapshot.
 **Ship the assertion as a test, not a manual check.**
 
+### Board isolation — verified, and one gap v4 must close
+
+**Question asked:** can one standing ever affect another?
+
+**Today: isolated by construction, with a latent hole.**
+- `players.leaderboard_id NOT NULL` + `unique(leaderboard_id, name)` → a player row belongs to
+  exactly one board. The same human on two boards is **two separate rows with different ids**, so
+  their table tennis record can never touch their card record.
+- `games.leaderboard_id NOT NULL`, and `v_standings` groups by `p.leaderboard_id`.
+
+**The hole (verified experimentally against real Postgres, 2026-07-21):** nothing at the DB level
+ties a game's *players* to the game's *leaderboard*. `p1..p4` are plain FKs to `players(id)`. A game
+was successfully inserted on board A containing a player from board B. Only the Edge Function's
+`"all 4 players must belong to this leaderboard"` check prevents it.
+
+**The failure mode is silent, which is what makes it dangerous.** Because `v_standings` joins on
+`g.leaderboard_id = p.leaderboard_id`, the foreign player is simply *skipped*:
+
+| board | player | gp | losses |
+|---|---|---|---|
+| IsoTest A | A1, A2, A3 | 1 | 0 |
+| IsoTest B | **B1** *(the game's loser!)* | **0** | **0** |
+
+A 4-player game counted for 3 people, and **the loser vanished entirely** — no error, no warning.
+
+**v4 closes it structurally** with a composite foreign key, so the database itself refuses:
+
+```sql
+alter table players add constraint players_id_board_uq unique (id, leaderboard_id);
+alter table games   add constraint games_id_board_uq   unique (id, leaderboard_id);
+
+create table game_participants (
+  game_id        bigint not null,
+  leaderboard_id bigint not null,        -- denormalised so BOTH fks must agree on it
+  side_id        bigint not null references game_sides(id) on delete cascade,
+  player_id      bigint not null,
+  primary key (game_id, player_id),
+  foreign key (game_id,   leaderboard_id) references games(id,   leaderboard_id) on delete cascade,
+  foreign key (player_id, leaderboard_id) references players(id, leaderboard_id) on delete restrict
+);
+```
+
+The shared `leaderboard_id` column forces both keys to agree, so a participant **must** come from the
+game's own board. Cross-board contamination becomes impossible rather than merely prevented.
+
+> This partly **repays** the integrity debt below: we lose the "exactly one loser" CHECK, but we gain
+> a structural guarantee we never had.
+
 ### The integrity tradeoff — read before approving
 
 Today's "exactly 4 players, exactly 1 loser" is **structural** — the database physically cannot hold
@@ -642,6 +691,10 @@ Ship app-level validation only and the standings will eventually be wrong. Decid
 | EC-7 | Adding a *loss-family* type to a points board | Rejected — family lock (§7.4) |
 | EC-8 | Board enabled for padel only, user tries a singles game | Rejected: allowed types named in the error |
 | EC-9 | Same player in a TT game and a padel round on one day | Fine — both count; daily spotlight aggregates across types |
+| EC-9b | Game references a player from **another board** | **Rejected by composite FK** (§13). Today this silently succeeds and the foreign player is dropped from every standing — the bug v4 fixes |
+| EC-9c | Same human plays on the cards board and the sports board | Two independent player rows, two independent records. **By design** — no cross-board totals exist |
+| EC-9d | Renaming a person on one board | Does **not** rename them on another; the rows are unrelated |
+| EC-9e | Deleting a whole leaderboard | Cascades to its own players and games only; other boards untouched |
 
 ### Table tennis scores (`first_to`)
 | # | Case | Expected behaviour |
