@@ -1,3 +1,8 @@
+> **⚠️ Partly superseded (2026-07-21).** v3 technical design for the card game (still live). The v4
+> racquet additions (table tennis + padel) are additive migrations `0003`–`0006` plus new Edge
+> Function actions and frontend, speced in [PRD-v4-multi-format-games.md](PRD-v4-multi-format-games.md)
+> and proven by the `supabase/tests/*.sql` fixtures. The card design here is unchanged.
+
 ```yaml
 doc_id: TRD-2026-001
 doc_type: trd

@@ -1,5 +1,9 @@
 # Build plan — Card game standings tracker
 
+> **⚠️ Partly superseded (2026-07-21).** v3 card-game plan, still accurate for cards. The v4 racquet
+> work (table tennis + padel) has its own additive migrations (0003–0006) and is speced in
+> [PRD-v4-multi-format-games.md](PRD-v4-multi-format-games.md). Nothing here changes.
+
 **Companion to:** TRD-2026-001-card-standings-tracker.md and PRD-card-game-standings-tracker.md (v3)
 **Stack:** Supabase (Postgres + Edge Functions) + vanilla JS static frontend, hosted on Netlify or Vercel
 **For:** building with Claude Code, epic by epic

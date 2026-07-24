@@ -1,5 +1,10 @@
 # PRD: Card game standings tracker
 
+> **⚠️ Partly superseded (2026-07-21).** This describes v3 — the fixed 4-player/1-loser card game,
+> which is still live and unchanged. Table tennis and padel are added by
+> [PRD-v4-multi-format-games.md](PRD-v4-multi-format-games.md) as a *separate flat table beside* the
+> card game (no migration, cards untouched). Build racquet features against v4, not this.
+
 **Owner:** Product (acting senior PM)
 **Status:** Draft v3 (council-reviewed + feature additions)
 **Date:** 2026-07-14
