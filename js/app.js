@@ -63,23 +63,20 @@ const GT_GROUPS = [
   { key: 'padel', label: '🎾 Padel', types: ['padel'] },
 ];
 function gameTypePickerHTML(selected) {
-  return `<p class="field-label">What do you play here?</p><div class="gt-picker" id="gt">${GT_GROUPS.map((g) => {
-    const on = g.types.every((t) => selected.includes(t));
-    return `<label class="gt-opt${on ? ' on' : ''}"><input type="checkbox" data-gt="${g.key}"${on ? ' checked' : ''}><span>${g.label}</span></label>`;
-  }).join('')}</div>`;
+  // One game per board: a single-choice radio. `selected` is the granular list; find its group.
+  const chosen = GT_GROUPS.find((g) => g.types.every((t) => selected.includes(t)))?.key ?? 'cards';
+  return `<p class="field-label">What do you play here?</p><div class="gt-picker" id="gt">${GT_GROUPS.map((g) =>
+    `<label class="gt-opt${g.key === chosen ? ' on' : ''}"><input type="radio" name="gt" value="${g.key}"${g.key === chosen ? ' checked' : ''}><span>${g.label}</span></label>`).join('')}</div>`;
 }
 function readGameTypes(box) {
-  const out = [];
-  box.querySelectorAll('#gt [data-gt]').forEach((cb) => {
-    if (cb.checked) out.push(...GT_GROUPS.find((g) => g.key === cb.dataset.gt).types);
-  });
-  return out;
+  const sel = box.querySelector('#gt input[name="gt"]:checked');
+  return GT_GROUPS.find((g) => g.key === sel?.value)?.types ?? ['cards'];
 }
-// Toggle the label highlight and keep the Save/Create button gated on ≥1 choice.
+// Highlight the chosen row. A radio always has exactly one selected, so Create stays enabled.
 function wireGamePicker(box, goBtn) {
-  box.querySelectorAll('#gt [data-gt]').forEach((cb) => cb.addEventListener('change', () => {
-    cb.closest('.gt-opt').classList.toggle('on', cb.checked);
-    goBtn.disabled = readGameTypes(box).length === 0;
+  box.querySelectorAll('#gt input[name="gt"]').forEach((r) => r.addEventListener('change', () => {
+    box.querySelectorAll('.gt-opt').forEach((o) => o.classList.toggle('on', o.querySelector('input').checked));
+    goBtn.disabled = false;
   }));
 }
 
