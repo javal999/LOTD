@@ -1,9 +1,32 @@
 import * as api from './api.js';
 import { buildExport } from './export.mjs';
 import {
-  computeStandings, biggestLoserAllTime, biggestLoserForDate, losingStreak,
-  MODES, LUCK_BASELINE, MIN_GAMES_FOR_RATE,
+  computeStandings, computeSportStandings, biggestLoserAllTime, biggestLoserToday, losingStreak,
+  MODES, LUCK_BASELINE, LUCK_BASELINE_SPORT, MIN_GAMES_FOR_RATE,
 } from './ranking.mjs';
+
+// Sport metadata: label, icon, players-per-side, and the round-length hint for padel.
+const SPORTS = {
+  tt_singles: { label: 'Table tennis · singles', icon: '🏓', perSide: 1, total: null },
+  tt_doubles: { label: 'Table tennis · doubles', icon: '🏓', perSide: 2, total: null },
+  padel:      { label: 'Padel · Americano',      icon: '🎾', perSide: 2, total: 21 },
+};
+const SPORT_ORDER = ['tt_singles', 'tt_doubles', 'padel'];
+
+// Client-side score check mirroring the server + DB. Returns null if valid, else a short reason.
+function sportScoreError(sport, a, b) {
+  if (a === '' || b === '' || a == null || b == null) return 'enter both scores';
+  a = Number(a); b = Number(b);
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return 'whole numbers only';
+  if (a === b) return 'someone has to win';
+  if (sport === 'padel') return a + b === 21 ? null : `must total 21 (now ${a + b})`;
+  const hi = Math.max(a, b), lo = Math.min(a, b);   // table tennis: first to 11, win by 2
+  if (hi === 11 && lo <= 9) return null;
+  if (hi > 11 && hi - lo === 2) return null;
+  if (hi < 11) return 'first to 11';
+  if (hi === 11 && lo === 10) return 'win by 2 from 10–10';
+  return 'not a valid score';
+}
 
 // ---- state ----
 const LAST_BOARD = 'lotd.lastBoard';
@@ -295,50 +318,229 @@ function openLog() {
   pec.focus();
 }
 
+// Roster memory: the players + A/B split from the last racquet round, per board+sport. Prefilled on
+// reopen so an 8-round padel night isn't 8 rounds of re-picking the same four people — the guard
+// against silent partial logging (PRD v4 §12 / R7).
+let lastSport = 'tt_singles';
+const rosterMem = {};   // `${boardId}:${sport}` -> { a:[ids], b:[ids] }
+
+// Log a table tennis or padel game: pick a sport, assign players to Side A / Side B, type the score.
+// The lower score loses; both players on the losing side are stamped. No unlock — the confess-word
+// is the secret, same as a card log.
+function openLogSport() {
+  const act = activePlayers();
+  ensureAudio();
+  if (act.length < 2) {
+    const box = el(`<div class="sheet"><h2>Racquet game</h2>
+      <p class="warn">Need at least 2 active players — add more first.</p>
+      <div class="sheet-actions"><button class="btn-ghost" data-close>Close</button></div></div>`);
+    openSheet(box);
+    return;
+  }
+  const today = api.localToday();
+  const canPlay = (s) => act.length >= SPORTS[s].perSide * 2;
+  let sport = canPlay(lastSport) ? lastSport : (SPORT_ORDER.find(canPlay) ?? 'tt_singles');
+  let a = [], b = [];
+  const memKey = () => `${boardId}:${sport}`;
+  const restore = () => {
+    const m = rosterMem[memKey()];
+    const ok = (id) => act.some((p) => p.id === id);
+    a = (m?.a ?? []).filter(ok).slice(0, SPORTS[sport].perSide);
+    b = (m?.b ?? []).filter(ok).slice(0, SPORTS[sport].perSide);
+  };
+  restore();
+
+  const box = el(`<div class="sheet sheet-log">
+    <h2 class="pec-title">Log a racquet game</h2>
+    <div class="log-types" id="types"></div>
+    <div class="teams">
+      <div class="team"><p class="team-label">Side A</p><div class="team-slots" id="slotsA"></div></div>
+      <div class="vs">vs</div>
+      <div class="team"><p class="team-label">Side B</p><div class="team-slots" id="slotsB"></div></div>
+    </div>
+    <p class="pick-label" id="picklabel"></p>
+    <div class="chips chips-lg" id="pool"></div>
+    <div class="score-row">
+      <input class="field score" id="sa" type="number" inputmode="numeric" min="0" placeholder="A">
+      <span class="score-dash">–</span>
+      <input class="field score" id="sb" type="number" inputmode="numeric" min="0" placeholder="B">
+    </div>
+    <p class="sheet-sub scorehint" id="scorehint"></p>
+    <button type="button" class="date-toggle" id="datetoggle">🗓️ <span id="datelabel">Hari ini</span> · <u>ubah tanggal</u></button>
+    <div class="date-wrap" id="datewrap" hidden><input class="field" type="date" id="d" value="${today}" max="${today}"></div>
+    <p class="sheet-error" id="err"></p>
+    <div class="sheet-actions">
+      <button class="btn-ghost" data-close>Batal</button>
+      <button class="btn-primary" id="save" disabled>Simpan</button>
+    </div></div>`);
+  const close = openSheet(box);
+  const q = (id) => box.querySelector(id);
+  const typesEl = q('#types'), slotsA = q('#slotsA'), slotsB = q('#slotsB'), pool = q('#pool');
+  const picklabel = q('#picklabel'), saEl = q('#sa'), sbEl = q('#sb'), scorehint = q('#scorehint');
+  const save = q('#save'), err = q('#err'), dateEl = q('#d');
+  const datetoggle = q('#datetoggle'), datewrap = q('#datewrap'), datelabel = q('#datelabel');
+  const assigned = () => [...a, ...b];
+
+  function drawTypes() {
+    const short = { tt_singles: 'Singles', tt_doubles: 'Doubles', padel: 'Padel' };
+    typesEl.innerHTML = SPORT_ORDER.map((s) =>
+      `<button class="ltype${s === sport ? ' on' : ''}" data-s="${s}"${canPlay(s) ? '' : ' disabled'}>${SPORTS[s].icon} ${short[s]}</button>`).join('');
+  }
+  function slots(ids, side) {
+    const per = SPORTS[sport].perSide;
+    let html = ids.map((id) => `<button class="chip on" data-remove="${side}:${id}">${esc(nameOf(id))} ✕</button>`).join('');
+    for (let i = ids.length; i < per; i++) html += '<span class="slot-empty">—</span>';
+    return html;
+  }
+  function drawTeams() {
+    const per = SPORTS[sport].perSide;
+    slotsA.innerHTML = slots(a, 'a');
+    slotsB.innerHTML = slots(b, 'b');
+    const need = per * 2 - assigned().length;
+    picklabel.textContent = need > 0 ? `Tap ${need} more player${need === 1 ? '' : 's'}` : 'Ready — enter the score';
+    const full = assigned().length >= per * 2;
+    pool.innerHTML = act.filter((p) => !assigned().includes(p.id)).map((p) =>
+      `<button class="chip" data-add="${p.id}"${full ? ' disabled' : ''}>${esc(p.name)}</button>`).join('');
+  }
+  function sync() {
+    const per = SPORTS[sport].perSide;
+    const full = a.length === per && b.length === per;
+    const serr = full ? sportScoreError(sport, saEl.value, sbEl.value) : null;
+    if (SPORTS[sport].total != null && full && (saEl.value !== '' || sbEl.value !== '')) {
+      const sum = (Number(saEl.value) || 0) + (Number(sbEl.value) || 0);
+      scorehint.textContent = `${sum} / ${SPORTS[sport].total}${serr && sum === SPORTS[sport].total ? ' · ' + serr : sum === SPORTS[sport].total ? ' ✓' : ''}`;
+    } else {
+      scorehint.textContent = full ? (serr ?? 'looks good ✓') : '';
+    }
+    scorehint.classList.toggle('bad', !!(full && serr));
+    save.disabled = !(full && !serr && dateEl.value && dateEl.value <= today);
+  }
+
+  typesEl.addEventListener('click', (e) => {
+    const t = e.target.closest('.ltype'); if (!t || t.disabled) return;
+    sport = t.dataset.s; lastSport = sport; restore(); drawTypes(); drawTeams(); sync();
+  });
+  pool.addEventListener('click', (e) => {
+    const id = Number(e.target.closest('[data-add]')?.dataset.add); if (!id) return;
+    const per = SPORTS[sport].perSide;
+    if (a.length < per) a.push(id); else if (b.length < per) b.push(id);
+    drawTeams(); sync();
+  });
+  box.querySelector('.teams').addEventListener('click', (e) => {
+    const r = e.target.closest('[data-remove]'); if (!r) return;
+    const [side, id] = r.dataset.remove.split(':'); const pid = Number(id);
+    if (side === 'a') a = a.filter((x) => x !== pid); else b = b.filter((x) => x !== pid);
+    drawTeams(); sync();
+  });
+  [saEl, sbEl].forEach((i) => i.addEventListener('input', () => { err.textContent = ''; sync(); }));
+  datetoggle.addEventListener('click', () => { datewrap.hidden = !datewrap.hidden; if (!datewrap.hidden) dateEl.focus(); });
+  dateEl.addEventListener('change', () => { datelabel.textContent = dateEl.value === today ? 'Hari ini' : dateEl.value; sync(); });
+
+  save.addEventListener('click', async () => {
+    const score_a = Number(saEl.value), score_b = Number(sbEl.value);
+    const name = (score_a < score_b ? a : b).map(nameOf).join(' & ');
+    const okd = await attempt(err, () => api.logSportsGame({
+      leaderboard_id: boardId, sport, game_date: dateEl.value, a, b, score_a, score_b, secret: LOSER_WORD,
+    }));
+    if (okd) {
+      rosterMem[memKey()] = { a: [...a], b: [...b] };
+      close(); await refresh();
+      showPecundang(name, async () => {
+        if (await attempt(null, () => api.undoLastSports(boardId, LOSER_WORD))) await refresh();
+      });
+    }
+  });
+
+  drawTypes(); drawTeams(); sync();
+}
+
 function openGames() {
-  let editing = null, confirming = null;
+  let editing = null, confirming = null;   // keyed 'card:5' / 'sport:3'
   const box = el(`<div class="sheet"><h2>Recent games</h2>
-    <p class="sheet-sub">Fix the loser or delete a game. Newest first.</p>
+    <p class="sheet-sub">Fix a result or delete a game. Newest first.</p>
     <p class="sheet-error" id="err"></p>
     <div class="rows" id="rows"></div>
     <div class="sheet-actions"><button class="btn-ghost" data-close>Done</button></div></div>`);
   const close = openSheet(box);
   const rows = box.querySelector('#rows'), err = box.querySelector('#err');
 
-  function draw() {
-    const games = data?.games ?? [];
-    if (!games.length) { rows.innerHTML = '<p class="row-empty">No games yet.</p>'; return; }
-    rows.innerHTML = games.map((g) => {
-      const who = [g.p1, g.p2, g.p3, g.p4].map(nameOf).join(' · ');
-      if (editing === g.id) {
-        const opts = [g.p1, g.p2, g.p3, g.p4].map((id) =>
-          `<button class="chip${g.loser === id ? ' on' : ''}" data-new="${g.id}:${id}">${esc(nameOf(id))}</button>`).join('');
-        return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(who)}</div>
-          <div class="chips" style="margin-top:6px">${opts}</div></div></div>`;
-      }
-      if (confirming === g.id) {
-        return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(who)}</div>
-          <div class="row-sub">Delete this game?</div></div>
-          <div class="row-actions"><button class="mini-btn danger" data-yes="${g.id}">Delete</button>
-          <button class="mini-btn" data-no="${g.id}">Keep</button></div></div>`;
-      }
+  const merged = () => [
+    ...(data?.games ?? []).map((g) => ({ type: 'card', g })),
+    ...(data?.sportsGames ?? []).map((g) => ({ type: 'sport', g })),
+  ].sort((x, y) => (x.g.created_at < y.g.created_at ? 1 : x.g.created_at > y.g.created_at ? -1 : 0));
+
+  function confirmRow(title, key) {
+    return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(title)}</div>
+      <div class="row-sub">Delete this game?</div></div>
+      <div class="row-actions"><button class="mini-btn danger" data-yes="${key}">Delete</button>
+      <button class="mini-btn" data-no="${key}">Keep</button></div></div>`;
+  }
+
+  function cardRow(g) {
+    const key = `card:${g.id}`, who = `🃏 ${[g.p1, g.p2, g.p3, g.p4].map(nameOf).join(' · ')}`;
+    if (editing === key) {
+      const opts = [g.p1, g.p2, g.p3, g.p4].map((id) =>
+        `<button class="chip${g.loser === id ? ' on' : ''}" data-newloser="${g.id}:${id}">${esc(nameOf(id))}</button>`).join('');
       return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(who)}</div>
-        <div class="row-sub"><span class="loss">${esc(nameOf(g.loser))}</span> lost · ${g.game_date}</div></div>
-        <div class="row-actions"><button class="mini-btn" data-edit="${g.id}">Edit</button>
-        <button class="mini-btn" data-del="${g.id}">Delete</button></div></div>`;
-    }).join('');
+        <div class="chips" style="margin-top:6px">${opts}</div></div></div>`;
+    }
+    if (confirming === key) return confirmRow(who, key);
+    return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(who)}</div>
+      <div class="row-sub"><span class="loss">${esc(nameOf(g.loser))}</span> lost · ${g.game_date}</div></div>
+      <div class="row-actions"><button class="mini-btn" data-edit="${key}">Edit</button>
+      <button class="mini-btn" data-del="${key}">Delete</button></div></div>`;
+  }
+
+  function sportRow(g) {
+    const key = `sport:${g.id}`, meta = SPORTS[g.sport] ?? { icon: '🎾' };
+    const aN = [g.a1, g.a2].filter(Boolean).map(nameOf).join('·');
+    const bN = [g.b1, g.b2].filter(Boolean).map(nameOf).join('·');
+    const title = `${meta.icon} ${aN} ${g.score_a}–${g.score_b} ${bN}`;
+    const loserN = (g.score_a < g.score_b ? [g.a1, g.a2] : [g.b1, g.b2]).filter(Boolean).map(nameOf).join(' & ');
+    if (editing === key) {
+      return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(title)}</div>
+        <div class="score-row" style="margin-top:6px">
+          <input class="field score" data-sa type="number" value="${g.score_a}" min="0">
+          <span class="score-dash">–</span>
+          <input class="field score" data-sb type="number" value="${g.score_b}" min="0">
+          <button class="mini-btn go" data-savescore="${g.id}:${g.sport}">Save</button></div></div></div>`;
+    }
+    if (confirming === key) return confirmRow(title, key);
+    return `<div class="row-item"><div class="row-main"><div class="row-title">${esc(title)}</div>
+      <div class="row-sub"><span class="loss">${esc(loserN)}</span> lost · ${g.game_date}</div></div>
+      <div class="row-actions"><button class="mini-btn" data-edit="${key}">Edit</button>
+      <button class="mini-btn" data-del="${key}">Delete</button></div></div>`;
+  }
+
+  function draw() {
+    const list = merged();
+    rows.innerHTML = list.length
+      ? list.map((it) => (it.type === 'card' ? cardRow(it.g) : sportRow(it.g))).join('')
+      : '<p class="row-empty">No games yet.</p>';
   }
 
   rows.addEventListener('click', async (e) => {
     const t = e.target.closest('button'); if (!t) return;
     const d = t.dataset; err.textContent = '';
-    if (d.edit) { editing = Number(d.edit); confirming = null; draw(); }
-    else if (d.new) {
-      const [gid, lid] = d.new.split(':').map(Number);
+    if (d.edit) { editing = d.edit; confirming = null; draw(); }
+    else if (d.newloser) {
+      const [gid, lid] = d.newloser.split(':').map(Number);
       if (await attempt(err, () => api.editLoser(gid, lid))) { editing = null; await refresh(); draw(); }
     }
-    else if (d.del) { confirming = Number(d.del); editing = null; draw(); }
-    else if (d.yes) { if (await attempt(err, () => api.deleteGame(Number(d.yes)))) { confirming = null; await refresh(); draw(); } }
+    else if (d.savescore) {
+      const [gid, sport] = d.savescore.split(':');
+      const wrap = t.closest('.score-row');
+      const sa = wrap.querySelector('[data-sa]').value, sb = wrap.querySelector('[data-sb]').value;
+      const serr = sportScoreError(sport, sa, sb);
+      if (serr) { err.textContent = serr; return; }
+      if (await attempt(err, () => api.editSportsScore(Number(gid), Number(sa), Number(sb)))) { editing = null; await refresh(); draw(); }
+    }
+    else if (d.del) { confirming = d.del; editing = null; draw(); }
+    else if (d.yes) {
+      const [type, id] = d.yes.split(':');
+      const fn = type === 'card' ? () => api.deleteGame(Number(id)) : () => api.deleteSportsGame(Number(id));
+      if (await attempt(err, fn)) { confirming = null; await refresh(); draw(); }
+    }
     else if (d.no) { confirming = null; draw(); }
   });
   draw();
@@ -445,17 +647,28 @@ function doExport() {
 const joinNames = (names) => names.join(' & ');
 const lossWord = (n) => `${n} loss${n === 1 ? '' : 'es'}`;
 
-function spotlightHTML() {
-  const rows = data?.standings ?? [];
-  const games = data?.games ?? [];
-  const players = data?.players ?? [];
-  const today = api.localToday();
+// All-time losses per player across every game type (cards + racquet) — a combined headline,
+// not the ranking (the per-sport tables rank fairly on loss rate). Raw count is fine for the joke.
+function combinedAllTime() {
+  const m = new Map();
+  for (const r of data?.standings ?? []) m.set(r.player_id, { name: r.name, losses: r.losses });
+  for (const r of data?.sportStandings ?? []) {
+    const cur = m.get(r.player_id) ?? { name: r.name, losses: 0 };
+    cur.losses += r.losses;
+    m.set(r.player_id, cur);
+  }
+  return [...m.values()];
+}
 
-  const allNames = biggestLoserAllTime(rows);
-  const allMax = rows.reduce((m, r) => Math.max(m, r.losses ?? 0), 0);
-  const todayNames = biggestLoserForDate(games, players, today);
-  const todayMax = todayNames.length
-    ? games.filter((g) => g.game_date === today && nameOf(g.loser) === todayNames[0]).length : 0;
+function spotlightHTML() {
+  const daily = data?.dailyLosses ?? [];       // combined losses today, from v_daily_losses
+  const allRows = combinedAllTime();
+
+  const allNames = biggestLoserAllTime(allRows);
+  const allMax = allRows.reduce((m, r) => Math.max(m, r.losses ?? 0), 0);
+  const todayNames = biggestLoserToday(daily);
+  const todayMax = daily.reduce((m, r) => Math.max(m, r.losses ?? 0), 0);
+  const anyGames = (data?.games?.length ?? 0) + (data?.sportsGames?.length ?? 0) > 0;
 
   const card = (cls, label, names, max, emptyMsg, suffix) => `
     <div class="spot ${cls}">
@@ -469,8 +682,43 @@ function spotlightHTML() {
   return `<div class="spotlights">
     ${card('crown', 'All-time biggest loser', allNames, allMax, 'No data yet', '')}
     ${card('', 'Today’s biggest loser', todayNames, todayMax,
-      games.length ? 'No games logged today' : 'No data yet', ' today')}
+      anyGames ? 'No games logged today' : 'No data yet', ' today')}
   </div>`;
+}
+
+// Compact per-sport standings: one table per sport that has games, ranked biggest-loser-first on
+// the 50% baseline. Returns '' when the board has no racquet games (so a card-only board is
+// unchanged). Each sport's rank-1 is the clay "biggest loser" of that sport.
+function sportTablesHTML() {
+  const all = data?.sportStandings ?? [];
+  if (!all.length) return '';
+  const bySport = {};
+  for (const r of all) (bySport[r.sport] ??= []).push(r);
+  return SPORT_ORDER.filter((s) => bySport[s]?.length).map((sport) => {
+    const { ranked, unranked } = computeSportStandings(bySport[sport]);
+    const meta = SPORTS[sport];
+    const row = (p, isRanked) => {
+      const archived = p.archived ? ' <span class="pill-archived">archived</span>' : '';
+      const rate = p.loss_rate === null ? '<span class="muted">–</span>'
+        : `${pct(p.loss_rate)}${p.beats_luck ? ` <span class="beats">${CHECK}<span class="sr-only">beats luck</span></span>` : ''}`;
+      const cls = isRanked && p.rank === 1 ? ' class="lead-loser"' : (isRanked ? '' : ' class="quiet-row"');
+      return `<tr${cls}><td class="rank">${isRanked ? p.rank : '<span class="muted">–</span>'}</td>
+        <td class="who">${esc(p.name)}${archived}</td>
+        <td class="num">${p.gp}</td><td class="num loss">${p.losses}</td><td class="num rate">${rate}</td></tr>`;
+    };
+    return `<section class="sport-block">
+      <h3 class="sport-head">${meta.icon} ${esc(meta.label)}</h3>
+      <table class="standings">
+        <thead><tr><th class="rank">#</th><th>Player</th><th class="num">GP</th><th class="num">L</th>
+          <th class="num">Loss rate</th></tr></thead>
+        <tbody>
+          ${ranked.map((p) => row(p, true)).join('')}
+          ${unranked.length ? `<tr class="group-row"><td colspan="5">Not enough games yet · needs ${MIN_GAMES_FOR_RATE}</td></tr>` : ''}
+          ${unranked.map((p) => row(p, false)).join('')}
+        </tbody>
+      </table>
+    </section>`;
+  }).join('');
 }
 
 function rowsHTML(list, ranked) {
@@ -560,9 +808,12 @@ function render() {
        <button class="mini-btn danger" id="b-del">Delete</button>` : '';
 
   const { ranked, unranked } = computeStandings(data?.standings ?? [], mode);
-  const noPlayers = (data?.standings?.length ?? 0) === 0;
+  const noPlayers = (data?.players?.length ?? 0) === 0;
+  const cardHasGames = (data?.games?.length ?? 0) > 0;
+  const sportHasGames = (data?.sportsGames?.length ?? 0) > 0;
+  const showCardTable = cardHasGames || !sportHasGames;  // hide the empty card table on a sports-only board
   const act = activePlayers().length;
-  document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log button
+  document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log buttons
 
   app.innerHTML = `
     ${unlocked ? `<div class="admin-row">
@@ -573,8 +824,11 @@ function render() {
     ${spotlightHTML()}
     ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
       <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
-      : tableHTML(ranked, unranked)}
-    ${!noPlayers ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif dulu"' : ''}>Log game</button>` : ''}`;
+      : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}`}
+    ${!noPlayers ? `<div class="logbar-wrap">
+      <button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : ''}>Log game</button>
+      <button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>🏓 🎾 Racquet</button>
+    </div>` : ''}`;
 
   app.querySelectorAll('.sort button').forEach((b) =>
     b.addEventListener('click', () => { mode = b.dataset.mode; render(); }));
@@ -585,6 +839,7 @@ function render() {
   document.getElementById('a-games')?.addEventListener('click', openGames);
   document.getElementById('a-export')?.addEventListener('click', doExport);
   document.getElementById('logbtn')?.addEventListener('click', openLog);
+  document.getElementById('logsport')?.addEventListener('click', openLogSport);
 }
 
 // ---- wire ----

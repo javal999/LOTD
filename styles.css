@@ -342,3 +342,37 @@ body.has-logbar .wrap { padding-bottom:96px; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, .sheet { transition:none !important; animation:none !important; } }
+
+/* ---- racquet: two-up log bar, sport picker, team assignment, scores (v4) ---- */
+.logbar-wrap {
+  position:fixed; left:50%; transform:translateX(-50%);
+  bottom:calc(20px + env(safe-area-inset-bottom)); z-index:20;
+  width:min(488px, calc(100% - 32px)); display:flex; gap:10px;
+}
+.logbar-wrap .logbar { position:static; left:auto; transform:none; width:auto; flex:1; }
+.logbar-wrap .logbar:active:not(:disabled) { transform:scale(.98); }
+.logbar.sport { flex:0 0 auto; padding:0 18px; background:var(--surface); color:var(--ink); border:1px solid var(--line); font-size:15px; }
+
+.log-types { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+.ltype {
+  flex:1; min-width:88px; height:40px; border:1px solid var(--line); background:var(--surface-2);
+  color:var(--ink-2); border-radius:var(--radius-pill); font-size:14px; font-weight:600;
+}
+.ltype.on { background:var(--felt-tint); border-color:transparent; color:var(--felt); }
+.ltype:disabled { opacity:.4; }
+
+.teams { display:flex; align-items:stretch; gap:10px; margin-bottom:14px; }
+.team { flex:1; min-width:0; background:var(--surface-2); border-radius:var(--radius-md); padding:10px; }
+.team-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-2); margin-bottom:8px; }
+.team-slots { display:flex; flex-wrap:wrap; gap:6px; min-height:36px; }
+.slot-empty { display:inline-flex; align-items:center; justify-content:center; min-width:44px; height:36px; border:1px dashed var(--line); border-radius:var(--radius-pill); color:var(--ink-2); }
+.vs { align-self:center; font-size:13px; font-weight:700; color:var(--ink-2); }
+
+.score-row { display:flex; align-items:center; justify-content:center; gap:12px; margin:6px 0 2px; }
+.field.score { width:92px; text-align:center; font-size:24px; font-weight:700; margin:0; }
+.score-dash { font-size:22px; font-weight:700; color:var(--ink-2); }
+.scorehint { min-height:18px; margin-top:6px; font-weight:600; text-align:center; }
+.scorehint.bad { color:var(--clay); }
+
+.sport-block { margin-top:22px; }
+.sport-head { font-family:var(--font-display); font-size:16px; font-weight:600; margin-bottom:8px; display:flex; align-items:center; gap:7px; }
