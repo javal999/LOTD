@@ -13,8 +13,9 @@ const H = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KE
 // same way the v_standings view would (gp = games played, losses = games lost).
 const mock = (() => {
   if (!USE_MOCK) return null;
+  const ALL_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel'];
   const s = {
-    boards: [{ id: 1, name: 'Geng Kartu' }],
+    boards: [{ id: 1, name: 'Geng Kartu', game_types: ALL_TYPES }],
     players: [
       { id: 1, leaderboard_id: 1, name: 'Levi', archived: false },
       { id: 2, leaderboard_id: 1, name: 'Budi', archived: false },
@@ -79,7 +80,7 @@ const mock = (() => {
   const inAnyGame = (id) => s.games.some((g) => inGame(g, id)) || s.sportsGames.some((g) => sidePlayers(g).includes(id));
 
   return {
-    listLeaderboards: () => s.boards.map((b) => ({ id: b.id, name: b.name })).sort((a, b) => a.name.localeCompare(b.name)),
+    listLeaderboards: () => s.boards.map((b) => ({ id: b.id, name: b.name, game_types: b.game_types ?? ALL_TYPES })).sort((a, b) => a.name.localeCompare(b.name)),
     loadBoard: (id) => {
       const byNewest = (a, b) => (a.game_date < b.game_date ? 1 : a.game_date > b.game_date ? -1 : (a.created_at < b.created_at ? 1 : -1));
       return {
@@ -92,8 +93,8 @@ const mock = (() => {
         dailyLosses: dailyLosses(id, localToday()),
       };
     },
-    createLeaderboard: (name) => { const b = { id: s.seqB++, name }; s.boards.push(b); return b; },
-    renameLeaderboard: (id, name) => { const b = board(id); if (b) b.name = name; return b; },
+    createLeaderboard: (name, game_types) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES) }; s.boards.push(b); return b; },
+    renameLeaderboard: (id, name, game_types) => { const b = board(id); if (b) { b.name = name; if (game_types?.length) b.game_types = game_types; } return b; },
     deleteLeaderboard: (id) => {
       s.boards = s.boards.filter((b) => b.id !== id);
       s.players = s.players.filter((p) => p.leaderboard_id !== id);
@@ -144,7 +145,7 @@ async function get(path) {
 // ---- reads ----
 
 export const listLeaderboards = () =>
-  USE_MOCK ? mock.listLeaderboards() : get('leaderboards?select=id,name&order=name');
+  USE_MOCK ? mock.listLeaderboards() : get('leaderboards?select=id,name,game_types&order=name');
 
 // Everything the UI needs for one leaderboard, in one round trip. Cards come from v_standings
 // (unchanged); racquet from v_sport_standings (cards filtered out — they're already covered);
@@ -188,10 +189,10 @@ async function call(action, payload = {}, passcode) {
   return out.data;
 }
 
-export const createLeaderboard = (name) =>
-  USE_MOCK ? mock.createLeaderboard(name) : call('create_leaderboard', { name });
-export const renameLeaderboard = (leaderboard_id, name) =>
-  USE_MOCK ? mock.renameLeaderboard(leaderboard_id, name) : call('rename_leaderboard', { leaderboard_id, name });
+export const createLeaderboard = (name, game_types) =>
+  USE_MOCK ? mock.createLeaderboard(name, game_types) : call('create_leaderboard', { name, game_types });
+export const renameLeaderboard = (leaderboard_id, name, game_types) =>
+  USE_MOCK ? mock.renameLeaderboard(leaderboard_id, name, game_types) : call('rename_leaderboard', { leaderboard_id, name, game_types });
 export const deleteLeaderboard = (leaderboard_id) =>
   USE_MOCK ? mock.deleteLeaderboard(leaderboard_id) : call('delete_leaderboard', { leaderboard_id });
 

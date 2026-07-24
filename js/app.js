@@ -49,7 +49,40 @@ const CHECK = '<svg class="ic" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></s
 const LOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
 const UNLOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
 
+const ALL_GAME_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel'];
 const boardName = () => boards.find((b) => b.id === boardId)?.name ?? '';
+const boardTypes = () => boards.find((b) => b.id === boardId)?.game_types ?? ALL_GAME_TYPES;
+const hasType = (t) => boardTypes().includes(t);
+const hasAnyRacquet = () => SPORT_ORDER.some((s) => hasType(s));
+
+// Game-type picker shared by New + Edit board. Three user-facing choices; table tennis maps to both
+// singles and doubles. `selected` is the granular list. Read back with readGameTypes().
+const GT_GROUPS = [
+  { key: 'cards', label: '🃏 Card game', types: ['cards'] },
+  { key: 'tt', label: '🏓 Table tennis', types: ['tt_singles', 'tt_doubles'] },
+  { key: 'padel', label: '🎾 Padel', types: ['padel'] },
+];
+function gameTypePickerHTML(selected) {
+  return `<p class="field-label">What do you play here?</p><div class="gt-picker" id="gt">${GT_GROUPS.map((g) => {
+    const on = g.types.every((t) => selected.includes(t));
+    return `<label class="gt-opt${on ? ' on' : ''}"><input type="checkbox" data-gt="${g.key}"${on ? ' checked' : ''}><span>${g.label}</span></label>`;
+  }).join('')}</div>`;
+}
+function readGameTypes(box) {
+  const out = [];
+  box.querySelectorAll('#gt [data-gt]').forEach((cb) => {
+    if (cb.checked) out.push(...GT_GROUPS.find((g) => g.key === cb.dataset.gt).types);
+  });
+  return out;
+}
+// Toggle the label highlight and keep the Save/Create button gated on ≥1 choice.
+function wireGamePicker(box, goBtn) {
+  box.querySelectorAll('#gt [data-gt]').forEach((cb) => cb.addEventListener('change', () => {
+    cb.closest('.gt-opt').classList.toggle('on', cb.checked);
+    goBtn.disabled = readGameTypes(box).length === 0;
+  }));
+}
+
 const nameOf = (id) => data?.players.find((p) => p.id === id)?.name ?? '?';
 const activePlayers = () => (data?.players ?? []).filter((p) => !p.archived);
 const archivedPlayers = () => (data?.players ?? []).filter((p) => p.archived);
@@ -115,16 +148,20 @@ function openPasscode() {
 function openNewBoard() {
   const box = el(`<div class="sheet"><h2>New leaderboard</h2>
     <p class="sheet-sub">Each leaderboard has its own players and games.</p>
-    <input class="field" id="n" placeholder="e.g. Poker night" autocomplete="off">
+    <input class="field" id="n" placeholder="e.g. Padel Jumat" autocomplete="off">
+    ${gameTypePickerHTML(['cards'])}
     <p class="sheet-error" id="err"></p>
     <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
     <button class="btn-primary" id="go">Create</button></div></div>`);
   const close = openSheet(box);
-  const input = box.querySelector('#n');
-  box.querySelector('#go').addEventListener('click', async () => {
+  const input = box.querySelector('#n'), go = box.querySelector('#go');
+  wireGamePicker(box, go);
+  go.addEventListener('click', async () => {
     if (!input.value.trim()) return input.focus();
+    const types = readGameTypes(box);
+    if (!types.length) return;
     const created = await attempt(box.querySelector('#err'), async () => {
-      const b = await api.createLeaderboard(input.value.trim());
+      const b = await api.createLeaderboard(input.value.trim(), types);
       localStorage.setItem(LAST_BOARD, String(b.id));
     });
     if (created) { close(); await refresh(); }
@@ -133,16 +170,21 @@ function openNewBoard() {
 }
 
 function openRenameBoard() {
-  const box = el(`<div class="sheet"><h2>Rename leaderboard</h2>
+  const box = el(`<div class="sheet"><h2>Board settings</h2>
+    <p class="field-label">Name</p>
     <input class="field" id="n" value="${esc(boardName())}" autocomplete="off">
+    ${gameTypePickerHTML(boardTypes())}
     <p class="sheet-error" id="err"></p>
     <div class="sheet-actions"><button class="btn-ghost" data-close>Cancel</button>
     <button class="btn-primary" id="go">Save</button></div></div>`);
   const close = openSheet(box);
-  const input = box.querySelector('#n');
-  box.querySelector('#go').addEventListener('click', async () => {
+  const input = box.querySelector('#n'), go = box.querySelector('#go');
+  wireGamePicker(box, go);
+  go.addEventListener('click', async () => {
     if (!input.value.trim()) return input.focus();
-    const okd = await attempt(box.querySelector('#err'), () => api.renameLeaderboard(boardId, input.value.trim()));
+    const types = readGameTypes(box);
+    if (!types.length) return;
+    const okd = await attempt(box.querySelector('#err'), () => api.renameLeaderboard(boardId, input.value.trim(), types));
     if (okd) { close(); await refresh(); }
   });
   input.focus(); input.select();
@@ -338,8 +380,10 @@ function openLogSport() {
     return;
   }
   const today = api.localToday();
+  const sports = SPORT_ORDER.filter(hasType);         // only what this board plays
   const canPlay = (s) => act.length >= SPORTS[s].perSide * 2;
-  let sport = canPlay(lastSport) ? lastSport : (SPORT_ORDER.find(canPlay) ?? 'tt_singles');
+  let sport = (hasType(lastSport) && canPlay(lastSport)) ? lastSport
+    : (sports.find(canPlay) ?? sports[0] ?? 'tt_singles');
   let a = [], b = [];
   const memKey = () => `${boardId}:${sport}`;
   const restore = () => {
@@ -383,7 +427,8 @@ function openLogSport() {
 
   function drawTypes() {
     const short = { tt_singles: 'Singles', tt_doubles: 'Doubles', padel: 'Padel' };
-    typesEl.innerHTML = SPORT_ORDER.map((s) =>
+    // Only this board's sports; hide the picker entirely when there's just one.
+    typesEl.innerHTML = sports.length < 2 ? '' : sports.map((s) =>
       `<button class="ltype${s === sport ? ' on' : ''}" data-s="${s}"${canPlay(s) ? '' : ' disabled'}>${SPORTS[s].icon} ${short[s]}</button>`).join('');
   }
   function slots(ids, side) {
@@ -694,7 +739,7 @@ function sportTablesHTML() {
   if (!all.length) return '';
   const bySport = {};
   for (const r of all) (bySport[r.sport] ??= []).push(r);
-  return SPORT_ORDER.filter((s) => bySport[s]?.length).map((sport) => {
+  return SPORT_ORDER.filter((s) => hasType(s) && bySport[s]?.length).map((sport) => {
     const { ranked, unranked } = computeSportStandings(bySport[sport]);
     const meta = SPORTS[sport];
     const row = (p, isRanked) => {
@@ -804,15 +849,20 @@ function render() {
     boards.map((b) => `<option value="${b.id}"${b.id === boardId ? ' selected' : ''}>${esc(b.name)}</option>`).join('');
   document.getElementById('board-admin').innerHTML = unlocked
     ? `<button class="mini-btn" id="b-new">New</button>
-       <button class="mini-btn" id="b-rename">Rename</button>
+       <button class="mini-btn" id="b-rename">Edit</button>
        <button class="mini-btn danger" id="b-del">Delete</button>` : '';
 
   const { ranked, unranked } = computeStandings(data?.standings ?? [], mode);
   const noPlayers = (data?.players?.length ?? 0) === 0;
   const cardHasGames = (data?.games?.length ?? 0) > 0;
-  const sportHasGames = (data?.sportsGames?.length ?? 0) > 0;
-  const showCardTable = cardHasGames || !sportHasGames;  // hide the empty card table on a sports-only board
   const act = activePlayers().length;
+  // Show the card table only on a board that plays cards — and not as an empty shell when the board
+  // also does racquet games but no cards have been logged yet.
+  const showCardTable = hasType('cards') && (cardHasGames || !hasAnyRacquet());
+  const cardBtn = hasType('cards')
+    ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : ''}>Log game</button>` : '';
+  const sportBtn = hasAnyRacquet()
+    ? `<button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>🏓 🎾 Racquet</button>` : '';
   document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log buttons
 
   app.innerHTML = `
@@ -825,10 +875,7 @@ function render() {
     ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
       <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
       : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}`}
-    ${!noPlayers ? `<div class="logbar-wrap">
-      <button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : ''}>Log game</button>
-      <button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>🏓 🎾 Racquet</button>
-    </div>` : ''}`;
+    ${!noPlayers && (cardBtn || sportBtn) ? `<div class="logbar-wrap">${cardBtn}${sportBtn}</div>` : ''}`;
 
   app.querySelectorAll('.sort button').forEach((b) =>
     b.addEventListener('click', () => { mode = b.dataset.mode; render(); }));

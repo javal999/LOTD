@@ -62,6 +62,14 @@ const isScore = (n: unknown): n is number => Number.isInteger(n) && (n as number
 const utcToday = () => new Date().toISOString().slice(0, 10);
 
 const SPORTS = ['tt_singles', 'tt_doubles', 'padel'] as const;
+const GAME_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel'];
+
+// Keep only known game types (deduped). null => let the DB default (all) stand.
+function cleanGameTypes(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  const gt = [...new Set(v.filter((t) => GAME_TYPES.includes(t)))];
+  return gt.length ? gt : null;
+}
 
 // Friendly score check mirroring the DB CHECK, so the user sees a sentence, not a constraint
 // name. The `valid_score` / `decisive` constraints are still the last line of defence.
@@ -115,7 +123,9 @@ Deno.serve(async (req) => {
       case 'create_leaderboard': {
         const name = String(payload.name ?? '').trim();
         if (!name) return bad('a leaderboard name is required');
-        const { data, error } = await db.from('leaderboards').insert({ name }).select().single();
+        const gt = cleanGameTypes(payload.game_types);
+        const { data, error } = await db.from('leaderboards')
+          .insert(gt ? { name, game_types: gt } : { name }).select().single();
         if (error) return bad(error.message);
         log(true, { leaderboard_id: data.id });
         return ok(data);
@@ -125,7 +135,10 @@ Deno.serve(async (req) => {
         const name = String(payload.name ?? '').trim();
         if (!isId(leaderboard_id)) return bad('leaderboard_id is required');
         if (!name) return bad('a leaderboard name is required');
-        const { data, error } = await db.from('leaderboards').update({ name }).eq('id', leaderboard_id).select().single();
+        const patch: Record<string, unknown> = { name };
+        const gt = cleanGameTypes(payload.game_types);
+        if (gt) patch.game_types = gt;
+        const { data, error } = await db.from('leaderboards').update(patch).eq('id', leaderboard_id).select().single();
         if (error) return bad(error.message);
         if (!data) return bad('leaderboard not found', 404);
         log(true, { leaderboard_id });

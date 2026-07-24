@@ -123,6 +123,15 @@ Deno.test('admin function v3', async (t) => {
     lb = r.body.data.id;
   });
 
+  await t.step('create_leaderboard with game_types round-trips', async () => {
+    const r = await call('create_leaderboard', { name: `GT ${Date.now()}`, game_types: ['padel', 'golf'] });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.game_types, ['padel']);   // unknown 'golf' filtered out
+    const e = await call('rename_leaderboard', { leaderboard_id: r.body.data.id, name: 'GT2', game_types: ['cards', 'tt_singles'] });
+    assertEquals(e.body.data.game_types, ['cards', 'tt_singles']);
+    await call('delete_leaderboard', { leaderboard_id: r.body.data.id });
+  });
+
   await t.step('create_leaderboard duplicate name -> 400', async () => {
     const name = `Dup ${Date.now()}`;
     assertEquals((await call('create_leaderboard', { name })).status, 200);
