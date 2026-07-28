@@ -124,16 +124,30 @@ const activePlayers = () => (data?.players ?? []).filter((p) => !p.archived);
 const archivedPlayers = () => (data?.players ?? []).filter((p) => p.archived);
 
 // ---- data ----
-async function loadBoards() {
-  boards = await api.listLeaderboards();
-  const remembered = Number(localStorage.getItem(LAST_BOARD));
-  boardId = boards.some((b) => b.id === remembered) ? remembered : (boards[0]?.id ?? null);
-}
 async function loadBoard() { data = boardId ? await api.loadBoard(boardId) : null; }
 
+// Full reload. To avoid a two-hop wait (fetch the board list, THEN the board's data), we fire the
+// remembered board's data in parallel with the list — on the common path (a returning user opening
+// the same board as last time) the table lands in one round-trip. If the remembered id turns out to
+// be gone, the optimistic result is discarded and we fetch the real board (the wasted request ran in
+// parallel, so it cost no extra wall-time).
 async function refresh() {
-  try { await loadBoards(); await loadBoard(); error = null; }
-  catch (e) { error = e.message; }
+  const remembered = Number(localStorage.getItem(LAST_BOARD)) || null;
+  try {
+    const boardsP = api.listLeaderboards();
+    const optimisticP = remembered ? api.loadBoard(remembered).catch(() => null) : null;
+
+    boards = await boardsP;
+    boardId = boards.some((b) => b.id === remembered) ? remembered : (boards[0]?.id ?? null);
+
+    if (boardId && boardId === remembered && optimisticP) {
+      data = await optimisticP;                                 // optimistic hit — no second round-trip
+      if (data === null) data = await api.loadBoard(boardId);   // the parallel load errored; fetch it now
+    } else {
+      data = boardId ? await api.loadBoard(boardId) : null;     // no/stale remembered id → fetch the real one
+    }
+    error = null;
+  } catch (e) { error = e.message; }
   render();
 }
 async function switchBoard(id) {
