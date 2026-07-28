@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
   if (!(await passcodeMatches(passcode))) {
     const n = (rec?.n ?? 0) + 1;
     fails.set(ip, { n, until: n >= MAX_FAILS ? now + LOCK_MS : 0 });
-    console.log(JSON.stringify({ at: 'admin', action, ip, ok: false, error: 'wrong passcode' }));
+    console.log(JSON.stringify({ at: 'admin', action, ip, ok: false, ts: new Date().toISOString(), error: 'wrong passcode' }));
     return bad('wrong passcode', 401);
   }
   fails.delete(ip); // a correct passcode clears the counter

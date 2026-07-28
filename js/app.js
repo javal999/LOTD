@@ -479,12 +479,13 @@ function openLogSport() {
   }
   function drawTeams() {
     const per = SPORTS[sport].perSide;
+    const asg = assigned();   // compute once — was rebuilt per player inside the pool filter below
     slotsA.innerHTML = slots(a, 'a');
     slotsB.innerHTML = slots(b, 'b');
-    const need = per * 2 - assigned().length;
+    const need = per * 2 - asg.length;
     picklabel.textContent = need > 0 ? `Tap ${need} more player${need === 1 ? '' : 's'}` : 'Ready — enter the score';
-    const full = assigned().length >= per * 2;
-    pool.innerHTML = act.filter((p) => !assigned().includes(p.id)).map((p) =>
+    const full = asg.length >= per * 2;
+    pool.innerHTML = act.filter((p) => !asg.includes(p.id)).map((p) =>
       `<button class="chip" data-add="${p.id}"${full ? ' disabled' : ''}>${esc(p.name)}</button>`).join('');
   }
   function sync() {

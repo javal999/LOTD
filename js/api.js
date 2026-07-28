@@ -108,7 +108,7 @@ const mock = (() => {
           .map((p) => ({ id: p.id, name: p.name, archived: p.archived })).sort((a, b) => a.name.localeCompare(b.name)),
         dailyLosses: dailyLosses(id, localToday()),
         padelSessions: s.sessions.filter((x) => x.leaderboard_id === id)
-          .slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
+          .slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 1),
       };
     },
     createLeaderboard: (name, game_types, points_target) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES), points_target: points_target ?? null }; s.boards.push(b); return b; },
@@ -185,7 +185,7 @@ export async function loadBoard(leaderboardId) {
     get(`sports_games?select=id,game_date,sport,a1,a2,b1,b2,score_a,score_b,points_target,session_id,created_at&leaderboard_id=eq.${id}&order=game_date.desc,created_at.desc`),
     get(`players?select=id,name,archived&leaderboard_id=eq.${id}&order=name`),
     get(`v_daily_losses?select=player_id,name,losses&leaderboard_id=eq.${id}&game_date=eq.${today}`),
-    get(`padel_sessions?select=id,game_date,roster,courts,rounds,created_at&leaderboard_id=eq.${id}&order=created_at.desc`),
+    get(`padel_sessions?select=id,game_date,roster,courts,rounds,created_at&leaderboard_id=eq.${id}&order=created_at.desc&limit=1`),
   ]);
   return { standings, sportStandings, padelStandings, games, sportsGames, players, dailyLosses, padelSessions };
 }
