@@ -6,6 +6,7 @@ import { assert, assertEquals } from 'https://deno.land/std@0.224.0/assert/mod.t
 
 const FN = Deno.env.get('FN_URL') ?? 'http://localhost:8000';
 const PASS = Deno.env.get('ADMIN_PASSCODE') ?? 'lotd-local-pass';
+const VIEW_PASS = Deno.env.get('ADMIN_VIEW_PASSCODE') ?? 'lotd-local-view';
 const REST = Deno.env.get('REST_URL') ?? 'http://127.0.0.1:54321/rest/v1';
 // Local stack's demo anon key (public, identical on every machine).
 const ANON = Deno.env.get('ANON_KEY') ??
@@ -461,6 +462,58 @@ Deno.test('padel: adjustable points-per-round target', async (t) => {
     });
     assertEquals(r.status, 400);
     assert(String(r.body.error).includes('16'), r.body.error);
+  });
+
+  await t.step('cleanup', async () => {
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
+  });
+});
+
+Deno.test('daily reveal: verify_view auth realm + reveal_hour', async (t) => {
+  let lb = 0;
+
+  await t.step('verify_view with the private word -> ok, canView', async () => {
+    const r = await call('verify_view', {}, VIEW_PASS);
+    assertEquals(r.status, 200);
+    assertEquals(r.body.ok, true);
+    assertEquals(r.body.data.canView, true);
+  });
+
+  await t.step('verify_view with the WRITE passcode -> 401 (separate realm)', async () => {
+    const r = await call('verify_view', {}, PASS);
+    assertEquals(r.status, 401);
+    assertEquals(r.body.ok, false);
+  });
+
+  await t.step('verify_view with a wrong word -> 401', async () => {
+    const r = await call('verify_view', {}, 'nope-not-it');
+    assertEquals(r.status, 401);
+  });
+
+  await t.step('the write passcode does NOT satisfy verify_view, and vice-versa', async () => {
+    // a normal write still needs the write passcode, not the view word
+    const bad = await call('create_leaderboard', { name: `X ${Date.now()}` }, VIEW_PASS);
+    assertEquals(bad.status, 401);
+  });
+
+  await t.step('create_leaderboard with reveal_hour round-trips (0 is valid)', async () => {
+    const r = await call('create_leaderboard', { name: `Reveal ${Date.now()}`, reveal_hour: 0 });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.reveal_hour, 0);
+    lb = r.body.data.id;
+  });
+
+  await t.step('rename can change reveal_hour; out-of-range is ignored (stays 0)', async () => {
+    const good = await call('rename_leaderboard', { leaderboard_id: lb, name: 'Reveal2', reveal_hour: 21 });
+    assertEquals(good.body.data.reveal_hour, 21);
+    const bad = await call('rename_leaderboard', { leaderboard_id: lb, name: 'Reveal3', reveal_hour: 25 });
+    assertEquals(bad.body.data.reveal_hour, 21);   // 25 rejected by cleanHour, previous value kept
+  });
+
+  await t.step('default reveal_hour is 17 when unspecified', async () => {
+    const r = await call('create_leaderboard', { name: `Default ${Date.now()}` });
+    assertEquals(r.body.data.reveal_hour, 17);
+    await call('delete_leaderboard', { leaderboard_id: r.body.data.id });
   });
 
   await t.step('cleanup', async () => {

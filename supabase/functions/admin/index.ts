@@ -13,6 +13,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const PASSCODE = Deno.env.get('ADMIN_PASSCODE') ?? '';
+// Private "peek early" password for the Daily Reveal — separate from the public write passcode, and
+// checked in its own auth realm (see verify_view). Unset => early view is simply unavailable (fail-closed).
+const VIEW_PASSCODE = Deno.env.get('ADMIN_VIEW_PASSCODE') ?? '';
 // Empty => allow any origin (local dev only). In prod this is set to the site origin(s).
 const ALLOWED = (Deno.env.get('ALLOWED_ORIGIN') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -41,20 +44,21 @@ function corsHeaders(req: Request): Record<string, string> {
   return h;
 }
 
-// Constant-time compare. Hashing first gives fixed-length inputs, so a length difference
-// can't leak through an early return.
-async function passcodeMatches(given: unknown): Promise<boolean> {
-  if (!PASSCODE || typeof given !== 'string') return false;
+// Constant-time compare against a given secret. Hashing first gives fixed-length inputs, so a length
+// difference can't leak through an early return. Empty secret => never matches (fail-closed).
+async function secretMatches(given: unknown, secret: string): Promise<boolean> {
+  if (!secret || typeof given !== 'string') return false;
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([
     crypto.subtle.digest('SHA-256', enc.encode(given)),
-    crypto.subtle.digest('SHA-256', enc.encode(PASSCODE)),
+    crypto.subtle.digest('SHA-256', enc.encode(secret)),
   ]);
   const va = new Uint8Array(a), vb = new Uint8Array(b);
   let diff = 0;
   for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
   return diff === 0;
 }
+const passcodeMatches = (given: unknown) => secretMatches(given, PASSCODE);
 
 const isIsoDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isId = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
@@ -73,6 +77,11 @@ function cleanGameTypes(v: unknown): string[] | null {
 // A padel round length (6–99) or null to leave the column unset.
 function cleanPoints(v: unknown): number | null {
   return Number.isInteger(v) && (v as number) >= 6 && (v as number) <= 99 ? (v as number) : null;
+}
+// A reveal hour (0–23) or null to leave the column at its default. Note: 0 is valid, so callers must
+// test `!== null`, never truthiness.
+function cleanHour(v: unknown): number | null {
+  return Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 23 ? (v as number) : null;
 }
 
 // Friendly score check mirroring the DB CHECK, so the user sees a sentence, not a constraint
@@ -119,6 +128,20 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return bad('bad request'); }
   const { action, passcode, payload = {} } = body ?? {};
 
+  // Daily Reveal early-view check. Its OWN auth realm — the private view password, not the write
+  // passcode — so it's handled before the write gate (else the private word would 401 against the
+  // public one). Shares the per-IP lockout so it can't be brute-forced; fails closed if unset.
+  if (action === 'verify_view') {
+    if (await secretMatches(passcode, VIEW_PASSCODE)) {
+      fails.delete(ip);
+      return json({ ok: true, data: { canView: true } });
+    }
+    const n = (rec?.n ?? 0) + 1;
+    fails.set(ip, { n, until: n >= MAX_FAILS ? now + LOCK_MS : 0 });
+    console.log(JSON.stringify({ at: 'admin', action, ip, ok: false, ts: new Date().toISOString(), error: 'wrong view passcode' }));
+    return bad('wrong passcode', 401);
+  }
+
   if (!(await passcodeMatches(passcode))) {
     const n = (rec?.n ?? 0) + 1;
     fails.set(ip, { n, until: n >= MAX_FAILS ? now + LOCK_MS : 0 });
@@ -139,9 +162,11 @@ Deno.serve(async (req) => {
         if (!name) return bad('a leaderboard name is required');
         const gt = cleanGameTypes(payload.game_types);
         const pt = cleanPoints(payload.points_target);
+        const rh = cleanHour(payload.reveal_hour);
         const row: Record<string, unknown> = { name };
         if (gt) row.game_types = gt;
         if (pt) row.points_target = pt;
+        if (rh !== null) row.reveal_hour = rh;   // 0 is valid — test !== null, not truthiness
         const { data, error } = await db.from('leaderboards').insert(row).select().single();
         if (error) return bad(error.message);
         log(true, { leaderboard_id: data.id });
@@ -157,6 +182,8 @@ Deno.serve(async (req) => {
         if (gt) patch.game_types = gt;
         const pt = cleanPoints(payload.points_target);
         if (pt) patch.points_target = pt;
+        const rh = cleanHour(payload.reveal_hour);
+        if (rh !== null) patch.reveal_hour = rh;   // 0 is valid — test !== null, not truthiness
         const { data, error } = await db.from('leaderboards').update(patch).eq('id', leaderboard_id).select().single();
         if (error) return bad(error.message);
         if (!data) return bad('leaderboard not found', 404);
