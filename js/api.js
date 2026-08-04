@@ -14,8 +14,9 @@ const H = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KE
 const mock = (() => {
   if (!USE_MOCK) return null;
   const ALL_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel'];
+  const VIEW_WORD = 'goyangdumang77';   // demo private "peek early" password (real one lives server-side)
   const s = {
-    boards: [{ id: 1, name: 'Geng Kartu', game_types: ALL_TYPES, points_target: 21 }],
+    boards: [{ id: 1, name: 'Geng Kartu', game_types: ALL_TYPES, points_target: 21, reveal_hour: 0 }],
     players: [
       { id: 1, leaderboard_id: 1, name: 'Levi', archived: false },
       { id: 2, leaderboard_id: 1, name: 'Budi', archived: false },
@@ -95,7 +96,8 @@ const mock = (() => {
   const inAnyGame = (id) => s.games.some((g) => inGame(g, id)) || s.sportsGames.some((g) => sidePlayers(g).includes(id));
 
   return {
-    listLeaderboards: () => s.boards.map((b) => ({ id: b.id, name: b.name, game_types: b.game_types ?? ALL_TYPES, points_target: b.points_target ?? null })).sort((a, b) => a.name.localeCompare(b.name)),
+    listLeaderboards: () => s.boards.map((b) => ({ id: b.id, name: b.name, game_types: b.game_types ?? ALL_TYPES, points_target: b.points_target ?? null, reveal_hour: b.reveal_hour ?? 17 })).sort((a, b) => a.name.localeCompare(b.name)),
+    verifyView: (pw) => pw === VIEW_WORD,
     loadBoard: (id) => {
       const byNewest = (a, b) => (a.game_date < b.game_date ? 1 : a.game_date > b.game_date ? -1 : (a.created_at < b.created_at ? 1 : -1));
       return {
@@ -111,8 +113,8 @@ const mock = (() => {
           .slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 1),
       };
     },
-    createLeaderboard: (name, game_types, points_target) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES), points_target: points_target ?? null }; s.boards.push(b); return b; },
-    renameLeaderboard: (id, name, game_types, points_target) => { const b = board(id); if (b) { b.name = name; if (game_types?.length) b.game_types = game_types; if (points_target) b.points_target = points_target; } return b; },
+    createLeaderboard: (name, game_types, points_target, reveal_hour) => { const b = { id: s.seqB++, name, game_types: (game_types?.length ? game_types : ALL_TYPES), points_target: points_target ?? null, reveal_hour: Number.isInteger(reveal_hour) ? reveal_hour : 17 }; s.boards.push(b); return b; },
+    renameLeaderboard: (id, name, game_types, points_target, reveal_hour) => { const b = board(id); if (b) { b.name = name; if (game_types?.length) b.game_types = game_types; if (points_target) b.points_target = points_target; if (Number.isInteger(reveal_hour)) b.reveal_hour = reveal_hour; } return b; },
     deleteLeaderboard: (id) => {
       s.boards = s.boards.filter((b) => b.id !== id);
       s.players = s.players.filter((p) => p.leaderboard_id !== id);
@@ -168,7 +170,7 @@ async function get(path) {
 // ---- reads ----
 
 export const listLeaderboards = () =>
-  USE_MOCK ? mock.listLeaderboards() : get('leaderboards?select=id,name,game_types,points_target&order=name');
+  USE_MOCK ? mock.listLeaderboards() : get('leaderboards?select=id,name,game_types,points_target,reveal_hour&order=name');
 
 // Everything the UI needs for one leaderboard, in one round trip. Cards come from v_standings
 // (unchanged); racquet from v_sport_standings (cards filtered out — they're already covered);
@@ -214,10 +216,15 @@ async function call(action, payload = {}, passcode) {
   return out.data;
 }
 
-export const createLeaderboard = (name, game_types, points_target) =>
-  USE_MOCK ? mock.createLeaderboard(name, game_types, points_target) : call('create_leaderboard', { name, game_types, points_target });
-export const renameLeaderboard = (leaderboard_id, name, game_types, points_target) =>
-  USE_MOCK ? mock.renameLeaderboard(leaderboard_id, name, game_types, points_target) : call('rename_leaderboard', { leaderboard_id, name, game_types, points_target });
+export const createLeaderboard = (name, game_types, points_target, reveal_hour) =>
+  USE_MOCK ? mock.createLeaderboard(name, game_types, points_target, reveal_hour) : call('create_leaderboard', { name, game_types, points_target, reveal_hour });
+export const renameLeaderboard = (leaderboard_id, name, game_types, points_target, reveal_hour) =>
+  USE_MOCK ? mock.renameLeaderboard(leaderboard_id, name, game_types, points_target, reveal_hour) : call('rename_leaderboard', { leaderboard_id, name, game_types, points_target, reveal_hour });
+
+// Verify the private "peek early" password (Daily Reveal). Never sent as a stored session passcode —
+// it's a one-off check; on success the client reveals results before the board's reveal hour.
+export const verifyViewPasscode = (passcode) =>
+  USE_MOCK ? Promise.resolve({ canView: mock.verifyView(passcode) }) : call('verify_view', {}, passcode);
 export const deleteLeaderboard = (leaderboard_id) =>
   USE_MOCK ? mock.deleteLeaderboard(leaderboard_id) : call('delete_leaderboard', { leaderboard_id });
 

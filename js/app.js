@@ -49,6 +49,7 @@ let boardId = null;
 let data = null;      // { standings, games, players }
 let mode = MODES.HIGHEST_LOSS_RATE;  // default to the skill view — worst first, like the spotlight
 let error = null;
+let revealTimer = null;              // one-shot timer that flips a hidden board open at its reveal hour
 
 // The confess-word. Typing "<name> pecundang" in the log box both names the loser and
 // proves the shared secret to the server, so no separate unlock is needed to log a game.
@@ -70,6 +71,12 @@ const hasType = (t) => boardTypes().includes(t);
 const hasAnyRacquet = () => SPORT_ORDER.some((s) => hasType(s));
 // This board's Americano points-per-round (default 21 if never set).
 const boardPoints = () => boards.find((b) => b.id === boardId)?.points_target ?? 21;
+// Daily Reveal: the hour (0–23) this board flips its standings open. `?? 17`, never `|| 17` (0 is valid).
+const boardRevealHour = () => boards.find((b) => b.id === boardId)?.reveal_hour ?? 17;
+// The admin proved the private view password this tab → may peek before the reveal hour (all boards).
+const VIEW_KEY = 'lotd.viewEarly';
+const viewedEarly = () => sessionStorage.getItem(VIEW_KEY) === '1';
+const isRevealed = () => new Date().getHours() >= boardRevealHour() || viewedEarly();
 // A padel-only board uses the Americano points leaderboard, not the loss-rate tables. A legacy
 // multi-type board (e.g. the mock demo) keeps the loss-rate tables for every sport it plays.
 const isPadelBoard = () => { const t = boardTypes(); return t.length === 1 && t[0] === 'padel'; };
@@ -1200,19 +1207,38 @@ function render() {
   }
   document.body.classList.toggle('has-logbar', !noPlayers);  // reserve room for the fixed Log buttons
 
+  // Daily Reveal gate: with players present but before the reveal hour (and not an admin peek), swap
+  // the spotlights + tables for a locked card. Logging still works throughout.
+  const revealed = isRevealed();
+  const spotlights = padelBoard ? padelSpotlightHTML() : spotlightHTML();
+  const tables = padelBoard
+    ? `${padelSessionBanner()}${padelTableHTML()}`
+    : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}${hasType('padel') ? padelTableHTML() : ''}`;
+  const content = noPlayers
+    ? `<div class="empty small"><h2>No players yet</h2>
+        <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
+    : revealed ? `${spotlights}${shareBarHTML()}${tables}` : lockedCardHTML();
+
+  // Auto-flip at the reveal hour so a passive tab opens without a manual refresh (one-shot, re-armed
+  // each render). Only when hidden by time — a peeked or already-open board needs no timer.
+  clearTimeout(revealTimer);
+  if (!noPlayers && !revealed) {
+    const at = new Date(); at.setHours(boardRevealHour(), 0, 1, 0);
+    const ms = at.getTime() - Date.now();
+    if (ms > 0) revealTimer = setTimeout(render, ms);
+  }
+
   app.innerHTML = `
     ${unlocked ? `<div class="admin-row">
       <button class="linkbtn" id="a-players"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6"/><path d="M18 20a6 6 0 0 0-2-4.5"/></svg>Players</button>
       <button class="linkbtn" id="a-games"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent games</button>
       <button class="linkbtn" id="a-export"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>Export</button>
     </div>` : ''}
-    ${padelBoard ? padelSpotlightHTML() : spotlightHTML()}
-    ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
-      <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
-      : padelBoard ? `${padelSessionBanner()}${padelTableHTML()}`
-      : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}${hasType('padel') ? padelTableHTML() : ''}`}
+    ${content}
     ${!noPlayers && (cardBtn || sportBtn) ? `<div class="logbar-wrap">${cardBtn}${sportBtn}</div>` : ''}`;
 
+  document.getElementById('view-early')?.addEventListener('click', openViewUnlock);
+  document.getElementById('share-result')?.addEventListener('click', shareResult);
   app.querySelectorAll('.sort button').forEach((b) =>
     b.addEventListener('click', () => { mode = b.dataset.mode; render(); }));
   document.getElementById('b-new')?.addEventListener('click', openNewBoard);
