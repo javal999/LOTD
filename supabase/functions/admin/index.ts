@@ -61,8 +61,11 @@ const isId = (n: unknown): n is number => Number.isInteger(n) && (n as number) >
 const isScore = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0;
 const utcToday = () => new Date().toISOString().slice(0, 10);
 
-const SPORTS = ['tt_singles', 'tt_doubles', 'padel', 'bd_singles', 'bd_doubles'] as const;
-const GAME_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel', 'bd_singles', 'bd_doubles'];
+const SPORTS = ['tt_singles', 'tt_doubles', 'padel', 'bd_singles', 'bd_doubles', 'tt_americano'] as const;
+const GAME_TYPES = ['cards', 'tt_singles', 'tt_doubles', 'padel', 'bd_singles', 'bd_doubles', 'tt_americano'];
+// Americano sports: 2v2 doubles, scored to a fixed points_target and split, session-capable.
+const AMERICANO_SPORTS = ['padel', 'tt_americano'];
+const isAmericano = (sport: string) => AMERICANO_SPORTS.includes(sport);
 
 // Keep only known game types (deduped). null => let the DB default (all) stand.
 function cleanGameTypes(v: unknown): string[] | null {
@@ -80,8 +83,8 @@ function cleanPoints(v: unknown): number | null {
 // `padelTarget` is the board's round length (defaults to 21).
 function scoreError(sport: string, a: number, b: number, padelTarget = 21): string | null {
   if (a === b) return 'a game must have a winner — no draws';
-  if (sport === 'padel') {
-    return a + b === padelTarget ? null : `a padel round must total ${padelTarget} points — ${a}–${b} adds to ${a + b}`;
+  if (isAmericano(sport)) {
+    return a + b === padelTarget ? null : `an Americano round must total ${padelTarget} points — ${a}–${b} adds to ${a + b}`;
   }
   if (sport === 'bd_singles' || sport === 'bd_doubles') {   // badminton: first to 21, win by 2, cap 30
     const hi = Math.max(a, b), lo = Math.min(a, b);
@@ -302,10 +305,10 @@ Deno.serve(async (req) => {
         if (!named.every(isId)) return bad(singles ? 'two players are required' : 'four players are required');
         if (new Set(named).size !== named.length) return bad('a player can only be in a game once');
 
-        // Padel rounds must total the board's configured target (default 21); it's snapshotted on
-        // the game so a later board change never invalidates old rounds.
+        // Americano rounds (padel / tt_americano) must total the board's configured target (default
+        // 21); it's snapshotted on the game so a later board change never invalidates old rounds.
         let padelTarget: number | null = null;
-        if (sport === 'padel') {
+        if (isAmericano(sport)) {
           const { data: board } = await db.from('leaderboards').select('points_target').eq('id', leaderboard_id).maybeSingle();
           padelTarget = board?.points_target ?? 21;
         }
@@ -324,7 +327,7 @@ Deno.serve(async (req) => {
         const session_id = payload.session_id ?? null;
         if (session_id !== null) {
           if (!isId(session_id)) return bad('session_id must be a valid id');
-          if (sport !== 'padel') return bad('only a padel round can belong to a session');
+          if (!isAmericano(sport)) return bad('only an Americano round can belong to a session');
           const { data: sess, error: es } = await db.from('padel_sessions')
             .select('leaderboard_id, roster').eq('id', session_id).maybeSingle();
           if (es) return bad(es.message);
@@ -397,7 +400,7 @@ Deno.serve(async (req) => {
           .select('game_types').eq('id', leaderboard_id).maybeSingle();
         if (eb) return bad(eb.message);
         if (!board) return bad('leaderboard not found', 404);
-        if (!(board.game_types ?? []).includes('padel')) return bad('this board does not play padel');
+        if (!(board.game_types ?? []).some((t: string) => isAmericano(t))) return bad('this board does not play Americano');
 
         // Every roster player must belong to this board and be active.
         const { data: rows, error: e1 } = await db.from('players')

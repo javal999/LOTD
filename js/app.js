@@ -7,24 +7,28 @@ import {
 } from './ranking.mjs';
 import { generateSchedule, suggestedRounds, matchesPerRound } from './americano.mjs';
 
-// Sport metadata: label, icon, players-per-side, and the round-length hint for padel.
+// Sport metadata: label, icon, players-per-side, and the round-length hint for Americano sports.
 const SPORTS = {
-  tt_singles: { label: 'Table tennis · singles', icon: '🏓', perSide: 1, total: null },
-  tt_doubles: { label: 'Table tennis · doubles', icon: '🏓', perSide: 2, total: null },
-  bd_singles: { label: 'Badminton · singles',    icon: '🏸', perSide: 1, total: null },
-  bd_doubles: { label: 'Badminton · doubles',    icon: '🏸', perSide: 2, total: null },
-  padel:      { label: 'Padel · Americano',      icon: '🎾', perSide: 2, total: 21 },
+  tt_singles:   { label: 'Table tennis · singles',   icon: '🏓', perSide: 1, total: null },
+  tt_doubles:   { label: 'Table tennis · doubles',   icon: '🏓', perSide: 2, total: null },
+  bd_singles:   { label: 'Badminton · singles',      icon: '🏸', perSide: 1, total: null },
+  bd_doubles:   { label: 'Badminton · doubles',      icon: '🏸', perSide: 2, total: null },
+  padel:        { label: 'Padel · Americano',        icon: '🎾', perSide: 2, total: 21 },
+  tt_americano: { label: 'Table tennis · Americano', icon: '🏓', perSide: 2, total: 21 },
 };
-const SPORT_ORDER = ['tt_singles', 'tt_doubles', 'bd_singles', 'bd_doubles', 'padel'];
+const SPORT_ORDER = ['tt_singles', 'tt_doubles', 'bd_singles', 'bd_doubles', 'padel', 'tt_americano'];
+// Americano sports: 2v2, scored to a fixed points-per-round total and split, session-capable.
+const AMERICANO_SPORTS = ['padel', 'tt_americano'];
+const isAmericanoSport = (s) => AMERICANO_SPORTS.includes(s);
 
 // Client-side score check mirroring the server + DB. Returns null if valid, else a short reason.
-// `padelTarget` is this board's points-per-round (default 21); ignored for non-padel sports.
+// `padelTarget` is this board's points-per-round (default 21); ignored for non-Americano sports.
 function sportScoreError(sport, a, b, padelTarget = 21) {
   if (a === '' || b === '' || a == null || b == null) return 'enter both scores';
   a = Number(a); b = Number(b);
   if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return 'whole numbers only';
   if (a === b) return 'someone has to win';
-  if (sport === 'padel') return a + b === padelTarget ? null : `must total ${padelTarget} (now ${a + b})`;
+  if (isAmericanoSport(sport)) return a + b === padelTarget ? null : `must total ${padelTarget} (now ${a + b})`;
   if (sport === 'bd_singles' || sport === 'bd_doubles') {   // badminton: first to 21, win by 2, cap 30
     const hi = Math.max(a, b), lo = Math.min(a, b);
     if (hi === 21 && lo <= 19) return null;
@@ -70,18 +74,23 @@ const hasType = (t) => boardTypes().includes(t);
 const hasAnyRacquet = () => SPORT_ORDER.some((s) => hasType(s));
 // This board's Americano points-per-round (default 21 if never set).
 const boardPoints = () => boards.find((b) => b.id === boardId)?.points_target ?? 21;
-// A padel-only board uses the Americano points leaderboard, not the loss-rate tables. A legacy
-// multi-type board (e.g. the mock demo) keeps the loss-rate tables for every sport it plays.
-const isPadelBoard = () => { const t = boardTypes(); return t.length === 1 && t[0] === 'padel'; };
+// A single-Americano-sport board (padel OR table-tennis Americano) uses the points leaderboard, not
+// the loss-rate tables. A legacy multi-type board (e.g. the mock demo) keeps loss-rate for its sports.
+const isAmericanoBoard = () => { const t = boardTypes(); return t.length === 1 && isAmericanoSport(t[0]); };
+// The board's Americano sport, for logging + labelling ('padel' or 'tt_americano'); padel if none.
+const americanoSport = () => boardTypes().find(isAmericanoSport) ?? 'padel';
 
-// Game-type picker shared by New + Edit board. Three user-facing choices; table tennis maps to both
-// singles and doubles. `selected` is the granular list. Read back with readGameTypes().
+// Game-type picker shared by New + Edit board. Single-choice; table tennis maps to both singles and
+// doubles, the Americano options to their one sport. `selected` is the granular list.
 const GT_GROUPS = [
   { key: 'cards', label: '🃏 Card game', types: ['cards'] },
   { key: 'tt', label: '🏓 Table tennis', types: ['tt_singles', 'tt_doubles'] },
+  { key: 'tt_americano', label: '🏓 Table tennis · Americano', types: ['tt_americano'] },
   { key: 'badminton', label: '🏸 Badminton', types: ['bd_singles', 'bd_doubles'] },
-  { key: 'padel', label: '🎾 Padel', types: ['padel'] },
+  { key: 'padel', label: '🎾 Padel · Americano', types: ['padel'] },
 ];
+// GT_GROUP keys that use a fixed points-per-round (show the points field, store points_target).
+const POINT_GROUPS = ['padel', 'tt_americano'];
 function gameTypePickerHTML(selected) {
   // One game per board: a single-choice radio. `selected` is the granular list; find its group.
   const chosen = GT_GROUPS.find((g) => g.types.every((t) => selected.includes(t)))?.key ?? 'cards';
@@ -92,17 +101,17 @@ function readGameTypes(box) {
   const sel = box.querySelector('#gt input[name="gt"]:checked');
   return GT_GROUPS.find((g) => g.key === sel?.value)?.types ?? ['cards'];
 }
-// Points-per-round field, only meaningful for padel (Americano). Shown when padel is the choice.
+// Points-per-round field, only meaningful for the Americano sports. Shown when one is chosen.
 function pointsFieldHTML(points, selectedTypes) {
-  const show = selectedTypes.includes('padel');
+  const show = selectedTypes.some(isAmericanoSport);
   return `<div class="pt-wrap" id="ptwrap"${show ? '' : ' hidden'}>
     <p class="field-label">Points per round · Americano</p>
     <input class="field" id="pt" type="number" inputmode="numeric" min="6" max="99" value="${points ?? 21}">
     <p class="sheet-sub">Every round's two scores add up to this — e.g. 21. Set it once, per board.</p></div>`;
 }
-// The chosen points target, or null when the board isn't padel (so non-padel boards store no target).
+// The chosen points target, or null when the board isn't Americano (so those boards store no target).
 function readPoints(box) {
-  if (box.querySelector('#gt input[name="gt"]:checked')?.value !== 'padel') return null;
+  if (!POINT_GROUPS.includes(box.querySelector('#gt input[name="gt"]:checked')?.value)) return null;
   const v = Number(box.querySelector('#pt')?.value);
   return Number.isInteger(v) && v >= 6 && v <= 99 ? v : 21;
 }
@@ -112,7 +121,7 @@ function wireGamePicker(box, goBtn) {
   const ptwrap = box.querySelector('#ptwrap');
   const sync = () => {
     box.querySelectorAll('.gt-opt').forEach((o) => o.classList.toggle('on', o.querySelector('input').checked));
-    if (ptwrap) ptwrap.hidden = box.querySelector('#gt input[name="gt"]:checked')?.value !== 'padel';
+    if (ptwrap) ptwrap.hidden = !POINT_GROUPS.includes(box.querySelector('#gt input[name="gt"]:checked')?.value);
     goBtn.disabled = false;
   };
   box.querySelectorAll('#gt input[name="gt"]').forEach((r) => r.addEventListener('change', sync));
@@ -433,7 +442,7 @@ function openLogSport() {
   }
   const today = api.localToday();
   const padelTotal = boardPoints();                   // this board's Americano points-per-round
-  const totalFor = (s) => (s === 'padel' ? padelTotal : SPORTS[s].total);
+  const totalFor = (s) => (isAmericanoSport(s) ? padelTotal : SPORTS[s].total);
   const sports = SPORT_ORDER.filter(hasType);         // only what this board plays
   const canPlay = (s) => act.length >= SPORTS[s].perSide * 2;
   let sport = (hasType(lastSport) && canPlay(lastSport)) ? lastSport
@@ -561,13 +570,13 @@ function openLogSport() {
 // nothing about the pairings is stored, only the inputs.
 
 const latestSession = () => (data?.padelSessions ?? [])[0];
-const sessionGames = (sid) => (data?.sportsGames ?? []).filter((g) => g.session_id === sid && g.sport === 'padel');
+const sessionGames = (sid) => (data?.sportsGames ?? []).filter((g) => g.session_id === sid && isAmericanoSport(g.sport));
 
 // v_padel_standings-shaped rows built from raw padel games — for one session's live standings.
 function padelRowsFromGames(games) {
   const acc = new Map();
   for (const g of games) {
-    if (g.sport !== 'padel') continue;
+    if (!isAmericanoSport(g.sport)) continue;
     for (const [pid, pf, pa] of [[g.a1, g.score_a, g.score_b], [g.a2, g.score_a, g.score_b], [g.b1, g.score_b, g.score_a], [g.b2, g.score_b, g.score_a]]) {
       if (pid == null) continue;
       const r = acc.get(pid) ?? { player_id: pid, name: nameOf(pid), archived: false, rounds: 0, points_for: 0, points_against: 0 };
@@ -737,11 +746,11 @@ function openSessionRunner(session) {
     err.textContent = '';
     const wrap = btn.closest('.rmatch');
     const sa = wrap.querySelector('[data-sa]').value, sb = wrap.querySelector('[data-sb]').value;
-    const serr = sportScoreError('padel', sa, sb, target);
+    const serr = sportScoreError(americanoSport(), sa, sb, target);
     if (serr) { err.textContent = serr; return; }
     const a = btn.dataset.a.split(',').map(Number), b = btn.dataset.b.split(',').map(Number);
     const okd = await attempt(err, () => api.logSportsGame({
-      leaderboard_id: boardId, sport: 'padel', game_date: session.game_date,
+      leaderboard_id: boardId, sport: americanoSport(), game_date: session.game_date,
       a, b, score_a: Number(sa), score_b: Number(sb), session_id: session.id, secret: LOSER_WORD,
     }));
     if (okd) { await refresh(); draw(); }
@@ -991,8 +1000,8 @@ function sportTablesHTML() {
   if (!all.length) return '';
   const bySport = {};
   for (const r of all) (bySport[r.sport] ??= []).push(r);
-  // Padel is never a loss-rate table — it has its own Americano points table (padelTableHTML).
-  return SPORT_ORDER.filter((s) => s !== 'padel' && hasType(s) && bySport[s]?.length).map((sport) => {
+  // Americano sports are never loss-rate tables — they have the Americano points table (padelTableHTML).
+  return SPORT_ORDER.filter((s) => !isAmericanoSport(s) && hasType(s) && bySport[s]?.length).map((sport) => {
     const { ranked, unranked } = computeSportStandings(bySport[sport]);
     const meta = SPORTS[sport];
     const row = (p, isRanked) => {
@@ -1026,7 +1035,7 @@ function padelSpotlightHTML() {
   const { ranked } = computePadelStandings(data?.padelStandings ?? []);
   const worst = ranked[0];   // rank 1 = fewest average points = biggest loser
   const today = fewestPointsPadelToday(data?.sportsGames ?? [], data?.players ?? [], api.localToday());
-  const anyPadel = (data?.sportsGames ?? []).some((g) => g.sport === 'padel');
+  const anyPadel = (data?.sportsGames ?? []).some((g) => isAmericanoSport(g.sport));
 
   const card = (cls, label, main, meta, empty) => `
     <div class="spot ${cls}">
@@ -1062,7 +1071,7 @@ function padelTableHTML() {
       <td class="num">${diff}</td><td class="num rate">${p.avg != null ? p.avg.toFixed(1) : '–'}</td></tr>`;
   };
   return `<section class="sport-block">
-    <h3 class="sport-head">${SPORTS.padel.icon} ${esc(SPORTS.padel.label)}</h3>
+    <h3 class="sport-head">${SPORTS[americanoSport()].icon} ${esc(SPORTS[americanoSport()].label)}</h3>
     <table class="standings">
       <thead><tr><th class="rank">#</th><th>Player</th><th class="num">R</th>
         <th class="num">Pts</th><th class="num">+/−</th><th class="num">Avg</th></tr></thead>
@@ -1087,7 +1096,7 @@ function padelSessionBanner() {
   const done = sessionGames(sess.id).length;
   const complete = done >= total;
   return `<button class="amer-banner${complete ? ' complete' : ''}" id="resume-amer">
-    <span class="amer-b-title">🎾 Americano · ${esc(sess.game_date)}</span>
+    <span class="amer-b-title">${SPORTS[americanoSport()].icon} Americano · ${esc(sess.game_date)}</span>
     <span class="amer-b-sub">${done}/${total} matches logged · ${complete ? 'tap to review' : 'tap to resume'}</span></button>`;
 }
 
@@ -1177,7 +1186,7 @@ function render() {
        <button class="mini-btn" id="b-rename">Edit</button>
        <button class="mini-btn danger" id="b-del">Delete</button>` : '';
 
-  const padelBoard = isPadelBoard();
+  const americanoBoard = isAmericanoBoard();
   const { ranked, unranked } = computeStandings(data?.standings ?? [], mode);
   const noPlayers = (data?.players?.length ?? 0) === 0;
   const cardHasGames = (data?.games?.length ?? 0) > 0;
@@ -1188,12 +1197,12 @@ function render() {
   const cardBtn = hasType('cards')
     ? `<button class="logbar" id="logbtn"${act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : ''}>Log game</button>` : '';
   const racquetSport = SPORT_ORDER.find(hasType);   // this board's racquet sport (single-type boards)
-  // A padel board leads with Start Americano (the session flow) and keeps a quiet single-round log;
-  // other racquet boards just have their one Log game button.
+  // An Americano board (padel or TT·Americano) leads with Start Americano (the session flow) and keeps
+  // a quiet single-round log; other racquet boards just have their one Log game button.
   let sportBtn = '';
-  if (padelBoard) {
+  if (americanoBoard) {
     const dis = act < 4 ? ' disabled title="Butuh 4 pemain aktif"' : '';
-    sportBtn = `<button class="logbar" id="start-amer"${dis}>🎾 Start Americano</button>`
+    sportBtn = `<button class="logbar" id="start-amer"${dis}>${SPORTS[americanoSport()].icon} Start Americano</button>`
       + `<button class="logbar ghost" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>＋ Log round</button>`;
   } else if (hasAnyRacquet()) {
     sportBtn = `<button class="logbar sport" id="logsport"${act < 2 ? ' disabled title="Butuh 2 pemain"' : ''}>${SPORTS[racquetSport]?.icon ?? '🏓'} Log game</button>`;
@@ -1206,11 +1215,11 @@ function render() {
       <button class="linkbtn" id="a-games"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent games</button>
       <button class="linkbtn" id="a-export"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>Export</button>
     </div>` : ''}
-    ${padelBoard ? padelSpotlightHTML() : spotlightHTML()}
+    ${americanoBoard ? padelSpotlightHTML() : spotlightHTML()}
     ${noPlayers ? `<div class="empty small"><h2>No players yet</h2>
       <p>${unlocked ? 'Add players, then log your first game.' : 'Unlock to add players.'}</p></div>`
-      : padelBoard ? `${padelSessionBanner()}${padelTableHTML()}`
-      : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}${hasType('padel') ? padelTableHTML() : ''}`}
+      : americanoBoard ? `${padelSessionBanner()}${padelTableHTML()}`
+      : `${showCardTable ? tableHTML(ranked, unranked) : ''}${sportTablesHTML()}${boardTypes().some(isAmericanoSport) ? padelTableHTML() : ''}`}
     ${!noPlayers && (cardBtn || sportBtn) ? `<div class="logbar-wrap">${cardBtn}${sportBtn}</div>` : ''}`;
 
   app.querySelectorAll('.sort button').forEach((b) =>

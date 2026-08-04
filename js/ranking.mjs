@@ -124,7 +124,7 @@ export function fewestPointsPadelToday(sportsGames, players, dateStr) {
   const nameById = new Map(players.map((p) => [p.id, p.name]));
   const pts = new Map();
   for (const g of sportsGames) {
-    if (g.sport !== 'padel' || g.game_date !== dateStr) continue;
+    if ((g.sport !== 'padel' && g.sport !== 'tt_americano') || g.game_date !== dateStr) continue;
     for (const [id, f] of [[g.a1, g.score_a], [g.a2, g.score_a], [g.b1, g.score_b], [g.b2, g.score_b]]) {
       if (id == null) continue;
       pts.set(id, (pts.get(id) ?? 0) + f);

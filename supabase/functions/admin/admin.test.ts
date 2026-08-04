@@ -547,3 +547,53 @@ Deno.test('padel Americano sessions', async (t) => {
     assertEquals((await call('delete_leaderboard', { leaderboard_id: other })).status, 200);
   });
 });
+
+Deno.test('tt_americano: table-tennis Americano behaves like padel', async (t) => {
+  let lb = 0, sess = 0;
+  const p: number[] = [];
+
+  await t.step('create tt_americano board (points_target 21) + 4 players', async () => {
+    const r = await call('create_leaderboard', { name: `TTA ${Date.now()}`, game_types: ['tt_americano'], points_target: 21 });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.game_types, ['tt_americano']);
+    lb = r.body.data.id;
+    for (const n of ['A', 'B', 'C', 'D']) p.push((await call('add_player', { leaderboard_id: lb, name: n })).body.data.id);
+  });
+
+  await t.step('log tt_americano 13-8 (sums 21) -> ok, doubles, target snapshotted', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_americano', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 8,
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.points_target, 21);
+    assertEquals(r.body.data.a2, p[1]);   // it's doubles
+  });
+
+  await t.step('tt_americano 13-7 (sums 20) -> 400, mentions the total', async () => {
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_americano', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[1], b1: p[2], b2: p[3], score_a: 13, score_b: 7,
+    });
+    assertEquals(r.status, 400);
+    assert(String(r.body.error).includes('21'), r.body.error);
+  });
+
+  await t.step('a session on a tt_americano board -> ok, and a session round logs', async () => {
+    const cs = await call('create_padel_session', {
+      leaderboard_id: lb, game_date: TODAY, today: TODAY, roster: [p[0], p[1], p[2], p[3]], courts: 1, rounds: 3,
+    });
+    assertEquals(cs.status, 200);
+    sess = cs.body.data.id;
+    const r = await call('log_sports_game', {
+      leaderboard_id: lb, sport: 'tt_americano', game_date: TODAY, today: TODAY,
+      a1: p[0], a2: p[2], b1: p[1], b2: p[3], score_a: 12, score_b: 9, session_id: sess,
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.data.session_id, sess);
+  });
+
+  await t.step('cleanup', async () => {
+    assertEquals((await call('delete_leaderboard', { leaderboard_id: lb })).status, 200);
+  });
+});

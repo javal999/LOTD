@@ -82,7 +82,7 @@ const mock = (() => {
   const padelStandings = (id) => {
     const acc = new Map();
     for (const g of sportsOf(id)) {
-      if (g.sport !== 'padel') continue;
+      if (g.sport !== 'padel' && g.sport !== 'tt_americano') continue;
       for (const [pid, pf, pa] of [[g.a1, g.score_a, g.score_b], [g.a2, g.score_a, g.score_b], [g.b1, g.score_b, g.score_a], [g.b2, g.score_b, g.score_a]]) {
         if (pid == null) continue;
         const row = acc.get(pid) ?? { player_id: pid, rounds: 0, points_for: 0, points_against: 0 };
@@ -140,7 +140,7 @@ const mock = (() => {
     editLoser: (game_id, loser) => { const g = s.games.find((x) => x.id === game_id); if (g) g.loser = loser; return { game_id, loser }; },
     deleteGame: (game_id) => { s.games = s.games.filter((g) => g.id !== game_id); return { game_id }; },
     logSportsGame: ({ leaderboard_id, sport, game_date, a1, a2, b1, b2, score_a, score_b, session_id = null }) => {
-      const pt = sport === 'padel' ? (board(leaderboard_id)?.points_target ?? 21) : null;
+      const pt = (sport === 'padel' || sport === 'tt_americano') ? (board(leaderboard_id)?.points_target ?? 21) : null;
       const g = { id: s.seqSG++, leaderboard_id, sport, game_date, a1, a2: a2 ?? null, b1, b2: b2 ?? null, score_a, score_b, points_target: pt, session_id, created_at: new Date().toISOString() };
       s.sportsGames.push(g); return g;
     },
